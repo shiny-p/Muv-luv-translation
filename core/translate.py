@@ -2,12 +2,12 @@ import json
 import os
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from .config import (
     GLOSSARY_PATH,
     TRANSLATIONS_PATH,
     resolve_segments_path,
-    resolve_translations_path,
     resolve_api_key,
     video_output_dir,
 )
@@ -30,19 +30,20 @@ SYSTEM_PROMPT_DIALOGUE = (
     "4) 文本中用 ⟨⟨数字⟩⟩ 标注的词语是已确定的译名，必须原样保留该符号，不要翻译或改动。"
 )
 
-SYSTEM_PROMPT_NAME = (
-    "你是字幕翻译。把日语角色名翻译成简体中文。"
-    "要求：只输出译名这一个词，不要任何解释、引号或标点；"
-    "译名要简洁自然，符合中文称呼习惯，同一角色全程保持一致。"
-)
-
 GLOSSARY_TEMPLATE = """\
 {
   "names": {},
   "proper_nouns": {},
-  "_说明": "names=人名，proper_nouns=专有名词。把日语原文对应的中文译名填到引号内，例如 \\"威厳のある女性\\": \\"威严的女性\\"。留空表示先用模型翻译。下划线开头的键会被忽略。填好后再跑 translate 即生效。"
+  "_说明": "names=人名，proper_nouns=专有名词。台词中出现的这些词会按词典译名直接替换，不被模型改写。填好后再跑 translate 即生效。"
 }
 """
+
+FORMAT_SPEC = (
+    "本文件格式：每条记录为「原文 -> {translation, first_seen, last_seen}」，"
+    "translation=中文译文，first_seen/last_seen=该原文首次/最后出现的时间(秒)。"
+    "修改翻译只改 translation 的值；其余字段为程序生成，请勿改动或删除。"
+    "除下划线开头的键外，其余键均为台词原文，不可重命名。"
+)
 
 
 def load_translations(path=None):
@@ -54,31 +55,28 @@ def load_translations(path=None):
                 raw = json.load(f) or {}
         except Exception:
             raw = {}
-    names = raw.get("names") if isinstance(raw.get("names"), dict) else {}
-    dialogues = raw.get("dialogues") if isinstance(raw.get("dialogues"), dict) else {}
-    names = {str(k): (str(v["translation"]) if isinstance(v, dict) else str(v)) for k, v in names.items() if v}
-    dialogues = {str(k): (str(v["translation"]) if isinstance(v, dict) else str(v)) for k, v in dialogues.items() if v}
+    out = {}
     for k, v in raw.items():
-        if k in ("names", "dialogues", "timestamps") or str(k).startswith("_"):
+        key = str(k)
+        if key.startswith("_") or key in ("names", "dialogues", "timestamps"):
             continue
         t = v["translation"] if isinstance(v, dict) else v
-        t = str(t).strip()
-        if t and str(k) not in names and str(k) not in dialogues:
-            dialogues[str(k)] = t
-    return {"names": names, "dialogues": dialogues}
+        t = str(t).strip() if t else ""
+        if t:
+            out[key] = t
+    return out
 
 
-def save_translations(data, path, name_seen=None, dial_seen=None):
-    name_seen = name_seen or {}
+def save_translations(data, path, dial_seen=None):
     dial_seen = dial_seen or {}
-    out = {
-        "names": data["names"],
-        "dialogues": data["dialogues"],
-        "timestamps": {
-            "names": {k: [round(x, 2) for x in v] for k, v in name_seen.items()},
-            "dialogues": {k: [round(x, 2) for x in v] for k, v in dial_seen.items()},
-        },
-    }
+    out = {"_格式说明": FORMAT_SPEC}
+    for k in sorted(data):
+        t0, t1 = dial_seen.get(k, [0.0, 0.0])
+        out[k] = {
+            "translation": data[k],
+            "first_seen": round(t0, 2),
+            "last_seen": round(t1, 2),
+        }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(out, f, ensure_ascii=False, indent=2)
 
@@ -95,19 +93,6 @@ def load_glossary():
         data = {}
     data.setdefault("names", {})
     data.setdefault("proper_nouns", {})
-    return data
-
-
-def ensure_glossary(name_texts):
-    data = load_glossary()
-    changed = False
-    for text in sorted(name_texts):
-        if text not in data["names"] and text not in data["proper_nouns"]:
-            data["names"][text] = ""
-            changed = True
-    if changed:
-        with open(GLOSSARY_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
     return data
 
 
@@ -149,7 +134,7 @@ def _make_client(cfg):
     model = cfg.get("model") or preset.get("model")
     from openai import OpenAI
 
-    client = OpenAI(base_url=base_url, api_key=resolve_api_key(cfg))
+    client = OpenAI(base_url=base_url, api_key=resolve_api_key(cfg), timeout=60)
     return client, model, False
 
 
@@ -161,18 +146,19 @@ def _translate_one(client, model, text, system_prompt):
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": text},
         ],
+        extra_body={"thinking": {"type": "disabled"}},
     )
     return resp.choices[0].message.content.strip()
 
 
 def _safe_translate(client, model, text, system_prompt):
     last_err = None
-    for attempt in range(4):
+    for attempt in range(3):
         try:
             return _translate_one(client, model, text, system_prompt)
         except Exception as e:
             last_err = e
-            time.sleep(2 + 2 * attempt)
+            time.sleep(1 + attempt)
     print("翻译失败: %r -> %s" % (text, last_err))
     return None
 
@@ -194,71 +180,52 @@ def run_translate(cfg, force=False, video=None):
     except Exception:
         pass
 
-    name_texts = sorted({s["text"] for s in segments if s.get("kind") == "name"})
-    dialogue_texts = sorted({s["text"] for s in segments if s.get("kind") != "name"})
-
-    def seen(texts, kind):
-        info = {}
-        for s in segments:
-            if s.get("kind") != kind or s["text"] not in texts:
-                continue
-            t0, t1 = s["start"], s["end"]
-            cur = info.get(s["text"])
-            if cur is None:
-                info[s["text"]] = [t0, t1]
-            else:
-                info[s["text"]][0] = min(cur[0], t0)
-                info[s["text"]][1] = max(cur[1], t1)
-        out = {}
-        for k, (a, b) in info.items():
-            out[k] = [a / fps if fps else a, b / fps if fps else b]
-        return out
-
-    name_seen = seen(name_texts, "name")
-    dial_seen = seen(dialogue_texts, "dialogue")
+    dialogue_texts = sorted({s["text"] for s in segments})
+    info = {}
+    for s in segments:
+        t0, t1 = s["start"], s["end"]
+        cur = info.get(s["text"])
+        if cur is None:
+            info[s["text"]] = [t0, t1]
+        else:
+            info[s["text"]][0] = min(cur[0], t0)
+            info[s["text"]][1] = max(cur[1], t1)
+    dial_seen = {k: [a / fps if fps else a, b / fps if fps else b] for k, (a, b) in info.items()}
 
     tcfg = cfg["translation"]
     client, model, is_mock = _make_client(tcfg)
     data = load_translations(translations_path)
-    glossary = ensure_glossary(name_texts)
-    terms = glossary_terms(glossary)
-    changed = False
+    terms = glossary_terms(load_glossary())
 
-    for text in name_texts:
-        cur = data["names"].get(text, "")
-        if terms.get(text):
-            data["names"][text] = terms[text]
-            changed = True
-        elif not cur:
-            if is_mock:
-                data["names"][text] = "[译] %s" % text
-            else:
-                zh = _safe_translate(client, model, text, SYSTEM_PROMPT_NAME)
-                if zh:
-                    data["names"][text] = zh
-            changed = True
+    todo = [t for t in dialogue_texts if not data.get(t)]
+    if todo and not is_mock:
+        for t in list(todo):
+            if terms.get(t):
+                data[t] = terms[t]
+        todo = [t for t in todo if not data.get(t)]
 
-    for text in dialogue_texts:
-        cur = data["dialogues"].get(text, "")
-        if not cur:
-            if is_mock:
-                data["dialogues"][text] = "[译] %s" % text
-            elif terms.get(text):
-                data["dialogues"][text] = terms[text]
-            else:
+    if todo:
+        print("开始翻译 %d 条台词（%s / %s）..." % (len(todo), tcfg.get("provider"), model))
+        if is_mock:
+            for t in todo:
+                data[t] = "[译] %s" % t
+                save_translations(data, translations_path, dial_seen)
+        else:
+
+            def work(text):
                 source, mapping = _substitute_glossary(text, terms)
                 zh = _safe_translate(client, model, source, SYSTEM_PROMPT_DIALOGUE)
-                if zh:
-                    data["dialogues"][text] = _restore_glossary(zh, mapping)
-            changed = True
+                return text, (_restore_glossary(zh, mapping) if zh else None)
 
-    name_set = set(name_texts)
-    dial_set = set(dialogue_texts)
-    data["names"] = {k: v for k, v in data["names"].items() if k in name_set}
-    data["dialogues"] = {k: v for k, v in data["dialogues"].items() if k in dial_set}
+            with ThreadPoolExecutor(max_workers=6) as ex:
+                for text, zh in ex.map(work, todo):
+                    if zh:
+                        data[text] = zh
+                        save_translations(data, translations_path, dial_seen)
 
-    if changed:
-        save_translations(data, translations_path, name_seen, dial_seen)
+    keys = set(dialogue_texts)
+    data = {k: v for k, v in data.items() if k in keys}
+    save_translations(data, translations_path, dial_seen)
 
     if os.path.abspath(translations_path) != os.path.abspath(TRANSLATIONS_PATH) and os.path.exists(TRANSLATIONS_PATH):
         try:
@@ -266,14 +233,8 @@ def run_translate(cfg, force=False, video=None):
         except OSError:
             pass
 
-    unfilled_names = [t for t in name_texts if not terms.get(t)]
-    missing = [t for t in name_texts if not data["names"].get(t)]
-    missing += [t for t in dialogue_texts if not data["dialogues"].get(t)]
-    print("翻译完成：人名 %d 条，台词 %d 条 → %s" % (len(data["names"]), len(data["dialogues"]), translations_path))
-    if unfilled_names:
-        print("以下人名未在 glossary.json 中填写，已用模型临时翻译，请核对后填入词典：")
-        for t in unfilled_names:
-            print("  %s -> %s" % (t, data["names"].get(t, "")))
+    missing = [t for t in dialogue_texts if not data.get(t)]
+    print("翻译完成：%d 条台词 → %s" % (len(data), translations_path))
     if missing:
         print("以下 %d 条翻译失败，可稍后重跑 translate 补齐：%s" % (len(missing), missing))
     return data

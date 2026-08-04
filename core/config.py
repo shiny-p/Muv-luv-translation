@@ -30,7 +30,7 @@ TEMPLATE = """\
 # 视频日语字幕 → 简体中文 翻译工具 配置
 # 视频路径通过命令行参数传入（例如: python run.py all 0_1_1.mp4），不写在此处。
 # 修改保存后重跑会自动跳过已完成步骤。
-# 人名区/台词区可先用 `python run.py regions <视频>` 自动检测写入，之后保持不变
+# 台词区会在每个视频处理前自动检测并写入，无需手工填写；也可用 `python run.py regions <视频>` 单独检测
 output: output.mp4             # 输出视频文件名（放在 <视频名>_output/ 文件夹内）
 
 ocr:                           # ---- 文字识别 ----
@@ -41,12 +41,7 @@ ocr:                           # ---- 文字识别 ----
   min_area: 200                # 最小文字框面积(像素)，过滤噪点
   max_text_chars: 80           # 单条字幕最大字数
   require_japanese: true       # 只保留含日文字符的识别结果
-  name_region:                 # 人名区（相对坐标 0~1），由 regions 自动检测后填写
-    left: 0.24
-    top: 0.70
-    right: 0.40
-    bottom: 0.78
-  dialogue_region:             # 台词区（相对坐标 0~1）
+  dialogue_region:             # 台词区（相对坐标 0~1），自动检测后写入
     left: 0.24
     top: 0.79
     right: 0.67
@@ -62,7 +57,6 @@ translation:                   # ---- 文本翻译 ----
 render:                        # ---- 渲染输出 ----
   append_height: 160           # 底部加高的像素
   append_bg: auto              # 条带底色：auto(匹配台词框暖灰) | black | #RRGGBB
-  show_name: true              # 是否在条带内显示翻译后的人名
   width: 0                     # 输出宽度，0=保持原分辨率；性能不足可填 1920/1280
   fps: 0                       # 输出帧率，0=保持原帧率
   crf: 18                      # x264 质量，越小越清晰
@@ -88,7 +82,6 @@ DEFAULTS = {
         "max_text_chars": 80,
         "require_japanese": True,
         "region": {"top": 0.62, "bottom": 1.0},
-        "name_region": None,
         "dialogue_region": None,
     },
     "translation": {
@@ -101,7 +94,6 @@ DEFAULTS = {
     "render": {
         "append_height": 160,
         "append_bg": "auto",
-        "show_name": True,
         "width": 0,
         "fps": 0,
         "crf": 18,
@@ -143,13 +135,12 @@ def load_config():
     return deep_merge(DEFAULTS, cfg)
 
 
-def persist_regions(name_region, dialogue_region):
+def persist_dialogue_region(dialogue_region):
     with open(CONFIG_PATH, encoding="utf-8") as f:
         cfg = yaml.safe_load(f) or {}
     ocfg = cfg.setdefault("ocr", {})
     ocfg.pop("region", None)
-    if name_region:
-        ocfg["name_region"] = name_region
+    ocfg.pop("name_region", None)
     if dialogue_region:
         ocfg["dialogue_region"] = dialogue_region
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:

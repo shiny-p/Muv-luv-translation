@@ -1,6 +1,7 @@
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -186,12 +187,25 @@ def _resolve_strip_color(frame, cfg, h, w):
 
 
 def _render_frame_append(frame, idx, segments, translations, cfg, font_path, font_size,
-                         out_w, h_src, append_h, name_x_frac):
+                         out_w, h_src, append_h):
     active = [s for s in segments if s["start"] <= idx <= s["end"]]
-    names = [s for s in active if s.get("kind") == "name"]
-    dlg = [s for s in active if s.get("kind") != "name"]
-    dlg = sorted([s for s in dlg if _translation(translations, s)], key=_box_top)
-    ntext = _translation(translations, names[0]) if names else None
+    dlg = [s for s in active if _translation(translations, s)]
+    kept = []
+    for s in dlg:
+        sb = np.asarray(s["box"], np.float64)
+        ns = re.sub(r"\s+", "", s["text"])
+        drop = False
+        for t in dlg:
+            if t is s or len(t["text"]) <= len(s["text"]):
+                continue
+            tb = np.asarray(t["box"], np.float64)
+            if (sb[:, 1].min() >= tb[:, 1].min() - 12 and sb[:, 1].max() <= tb[:, 1].max() + 12
+                    and ns and ns in re.sub(r"\s+", "", t["text"])):
+                drop = True
+                break
+        if not drop:
+            kept.append(s)
+    dlg = sorted(kept, key=_box_top)
 
     seen = set()
     parts = []
@@ -205,7 +219,7 @@ def _render_frame_append(frame, idx, segments, translations, cfg, font_path, fon
     strip = np.zeros((append_h, out_w, 3), np.uint8)
     strip[:] = _resolve_strip_color(frame, cfg, h_src, out_w)
     out = np.vstack([frame, strip])
-    if not ntext and not dtext:
+    if not dtext:
         return out
 
     rcfg = cfg["render"]
@@ -219,29 +233,22 @@ def _render_frame_append(frame, idx, segments, translations, cfg, font_path, fon
     pad = max(10, int(append_h * 0.06))
 
     top = h_src + pad
-    if ntext:
-        nf = ImageFont.truetype(font_path, max(12, font_size - 4))
-        d.text((int(name_x_frac * out_w), top + _line_height(nf) / 2), ntext,
-               font=nf, fill=color, anchor="lm", stroke_width=sw, stroke_fill=sc)
-        top += _line_height(nf) + 12
-
-    if dtext:
-        size = font_size
+    size = font_size
+    f = ImageFont.truetype(font_path, size)
+    lines = _wrap_text(dtext, f, max_w - 2 * sw)
+    while len(lines) > 3 and size > 14:
+        size -= 2
         f = ImageFont.truetype(font_path, size)
         lines = _wrap_text(dtext, f, max_w - 2 * sw)
-        while len(lines) > 3 and size > 14:
-            size -= 2
-            f = ImageFont.truetype(font_path, size)
-            lines = _wrap_text(dtext, f, max_w - 2 * sw)
-        lh = _line_height(f)
-        gap = size // 3
-        total = lh * len(lines) + gap * (len(lines) - 1)
-        bottom = h_src + append_h - pad
-        cy = top + max(0, (bottom - top) - total) / 2 + lh / 2
-        for line in lines:
-            d.text((out_w / 2, cy), line, font=f, fill=color, anchor="mm",
-                   stroke_width=sw, stroke_fill=sc)
-            cy += lh + gap
+    lh = _line_height(f)
+    gap = size // 3
+    total = lh * len(lines) + gap * (len(lines) - 1)
+    bottom = h_src + append_h - pad
+    cy = top + max(0, (bottom - top) - total) / 2 + lh / 2
+    for line in lines:
+        d.text((out_w / 2, cy), line, font=f, fill=color, anchor="mm",
+               stroke_width=sw, stroke_fill=sc)
+        cy += lh + gap
 
     out[:, :] = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
     return out
@@ -307,7 +314,6 @@ def run_render(cfg, force=False, video=None):
 
     append_h = int(round(int(rcfg.get("append_height", 160)) * sf))
     out_h = int(round(h * sf)) + append_h
-    name_x_frac = (cfg["ocr"].get("name_region") or {}).get("left", 0.0) or 0.0
 
     stem = os.path.splitext(os.path.basename(video))[0]
     out_dir = video_output_dir(video)
@@ -338,7 +344,7 @@ def run_render(cfg, force=False, video=None):
                 frame = cv2.resize(frame, (out_w, int(round(h * sf))), interpolation=cv2.INTER_AREA)
             frame = _render_frame_append(
                 frame, src_i, segs, translations, cfg, font_path, font_size,
-                out_w, int(round(h * sf)), append_h, name_x_frac,
+                out_w, int(round(h * sf)), append_h,
             )
             while next_out < n_out and int(next_out * fps / target_fps) <= src_i:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)

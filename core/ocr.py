@@ -180,16 +180,7 @@ def _build_kind_segments(detections, step, kind):
 
 
 def _build_segments(detections, step):
-    all_segs = []
-    for kind in ("name", "dialogue"):
-        dets = {f: [d for d in ds if d["kind"] == kind] for f, ds in detections.items()}
-        dets = {f: v for f, v in dets.items() if v}
-        if dets:
-            all_segs.extend(_build_kind_segments(dets, step, kind))
-    all_segs.sort(key=lambda s: s["start"])
-    for i, s in enumerate(all_segs):
-        s["id"] = i
-    return all_segs
+    return _build_kind_segments(detections, step, "dialogue")
 
 
 def _refine_segments(segs, step, merge_text=True):
@@ -202,6 +193,10 @@ def _refine_segments(segs, step, merge_text=True):
         s["id"] = i
         s["box"] = np.round(np.asarray(s["box"])).astype(int).tolist()
     return segs
+
+
+def _norm_text(t):
+    return re.sub(r"\s+", "", t or "")
 
 
 def _substring_merge(segs, step):
@@ -217,7 +212,8 @@ def _substring_merge(segs, step):
                 a, b = segs[i], segs[j]
                 if a["end"] < b["start"] - step:
                     break
-                if _vertical_ok(a, b) and (a["text"] in b["text"] or b["text"] in a["text"]):
+                na, nb = _norm_text(a["text"]), _norm_text(b["text"])
+                if _vertical_ok(a, b) and (na in nb or nb in na):
                     merged = dict(b if len(b["text"]) > len(a["text"]) else a)
                     merged["start"] = min(a["start"], b["start"])
                     merged["end"] = max(a["end"], b["end"])
@@ -247,6 +243,11 @@ def _line_group(segs, step):
             s = segs[j]
             ov = min(g["end"], s["end"]) - max(g["start"], s["start"])
             if ov < step or not _vertical_ok(g, s):
+                continue
+            gx0, gx1 = float(g["box"][:, 0].min()), float(g["box"][:, 0].max())
+            sx0, sx1 = float(s["box"][:, 0].min()), float(s["box"][:, 0].max())
+            xov = min(gx1, sx1) - max(gx0, sx0)
+            if xov > 0.15 * min(gx1 - gx0, sx1 - sx0):
                 continue
             g["start"] = min(g["start"], s["start"])
             g["end"] = max(g["end"], s["end"])
@@ -285,28 +286,26 @@ def save_segments(video, segments, fps=0.0):
 
 def _ocr_regions(cfg, w, h):
     ocfg = cfg["ocr"]
-    if ocfg.get("name_region") and ocfg.get("dialogue_region"):
-        regions = []
-        for kind in ("name", "dialogue"):
-            r = ocfg[kind + "_region"]
-            regions.append(
-                (
-                    kind,
-                    int(r["left"] * w),
-                    int(r["top"] * h),
-                    int(r["right"] * w),
-                    int(r["bottom"] * h),
-                )
+    r = ocfg.get("dialogue_region")
+    if r:
+        return [
+            (
+                "dialogue",
+                int(r["left"] * w),
+                int(r["top"] * h),
+                int(r["right"] * w),
+                int(r["bottom"] * h),
             )
-        return regions
+        ]
     r = ocfg.get("region", {"top": 0.62, "bottom": 1.0})
     return [("dialogue", 0, int(r["top"] * h), w, int(r["bottom"] * h))]
 
 
 def run_ocr(video, cfg, force=False):
-    if os.path.exists(SEGMENTS_PATH) and not force:
+    seg_path = resolve_segments_path(video)
+    if os.path.exists(seg_path) and not force:
         print("OCR 结果已存在，跳过（加 --force 强制重跑）")
-        return load_segments()
+        return load_segments(seg_path)
 
     ocfg = cfg["ocr"]
     w, h, fps, n = video_info(video)
@@ -354,12 +353,7 @@ def run_ocr(video, cfg, force=False):
     segments = _build_segments(detections, step)
     save_segments(video, segments, fps)
     print(
-        "OCR 完成：识别到 %d 段（人名 %d / 台词 %d），唯一文本 %d"
-        % (
-            len(segments),
-            len([s for s in segments if s["kind"] == "name"]),
-            len([s for s in segments if s["kind"] == "dialogue"]),
-            len(set(s["text"] for s in segments)),
-        )
+        "OCR 完成：识别到 %d 段台词，唯一文本 %d"
+        % (len(segments), len(set(s["text"] for s in segments)))
     )
     return segments

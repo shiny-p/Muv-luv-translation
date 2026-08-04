@@ -2,7 +2,6 @@
 __pycache__/
 .DS_Store
 .env
-models/
 ocr/
 *.mp4
 translations.json
