@@ -9,9 +9,9 @@ ocr:
   require_japanese: true
   dialogue_region:
     left: 0.22
-    top: 0.775
-    right: 0.746
-    bottom: 0.926
+    top: 0.774
+    right: 0.742
+    bottom: 0.928
 translation:
   provider: deepseek
   base_url: https://api.deepseek.com

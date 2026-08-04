@@ -51,13 +51,22 @@ def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
     shots = {}
     if not cap.isOpened():
         raise RuntimeError("无法打开视频: %s" % video)
+
+    safe = int(fps * 10)
+    sample_frames = [int(i * (n - 1) / max(1, sample_count - 1)) for i in range(sample_count)]
+    candidates = [i for i, f in enumerate(sample_frames) if f >= safe]
+    if len(candidates) < SCREENSHOT_COUNT:
+        candidates = list(range(sample_count))
+    step = max(1, len(candidates) // SCREENSHOT_COUNT)
+    shot_inds = set(candidates[::step][:SCREENSHOT_COUNT])
+
     for i in range(sample_count):
-        fidx = int(i * (n - 1) / max(1, sample_count - 1))
+        fidx = sample_frames[i]
         cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)
         ok, f = cap.read()
         if not ok:
             continue
-        if i % max(1, sample_count // SCREENSHOT_COUNT) == 0:
+        if i in shot_inds:
             shots[fidx] = f.copy()
         for d in backend.recognize(f):
             b = np.asarray(d["box"]).round().astype(int)
