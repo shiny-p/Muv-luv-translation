@@ -4,12 +4,11 @@ import cv2
 import numpy as np
 
 from .config import video_output_dir
-from .ocr import JP_RE, _make_backend
+from .ocr import _make_backend
 from .video import video_info
 
 SAMPLE_COUNT = 24
-BAND_GAP_FRAC = 0.035
-BAND_GAP_MIN = 10
+BAND_GAP = 35
 PAD_FRAC = 0.02
 DIAL_MAX_X = 0.80
 NAME_MAX_X_SPAN = 0.35
@@ -44,26 +43,9 @@ def _cluster_bands(y_centers, gap):
     return bands
 
 
-def _merge_bands(bands, gap):
-    """把 y 间隔 <= gap 的相邻条带合并（同一对话框的多行台词）。"""
-    bands = sorted(bands)
-    merged = []
-    for y0, y1, cnt in bands:
-        if merged and y0 - merged[-1][1] <= gap:
-            prev = merged[-1]
-            merged[-1] = (prev[0], max(prev[1], y1), prev[2] + cnt)
-        else:
-            merged.append((y0, y1, cnt))
-    return merged
-
-
 def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
     w, h, fps, n = video_info(video)
     backend = _make_backend(cfg)
-    ocfg = cfg["ocr"]
-    min_score = float(ocfg.get("min_score", 0.5))
-    require_jp = bool(ocfg.get("require_japanese", False))
-    band_gap = max(BAND_GAP_MIN, int(BAND_GAP_FRAC * h))
     cap = cv2.VideoCapture(video)
     samples = []
     shots = {}
@@ -87,13 +69,6 @@ def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
         if i in shot_inds:
             shots[fidx] = f.copy()
         for d in backend.recognize(f):
-            if d["score"] < min_score:
-                continue
-            text = str(d.get("text", "")).strip()
-            if not text:
-                continue
-            if require_jp and not JP_RE.search(text):
-                continue
             b = np.asarray(d["box"]).round().astype(int)
             bx0, by0 = int(b[:, 0].min()), int(b[:, 1].min())
             bx1, by1 = int(b[:, 0].max()), int(b[:, 1].max())
@@ -106,7 +81,7 @@ def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
     if not samples:
         raise SystemExit("未检测到文字，无法自动定位台词区")
 
-    bands = _cluster_bands([s[0] for s in samples], band_gap)
+    bands = _cluster_bands([s[0] for s in samples], BAND_GAP)
     maxc = max(b[2] for b in bands)
     th = max(3, 0.25 * maxc)
     persistent = [b for b in bands if b[2] >= th]
@@ -124,7 +99,7 @@ def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
         raise SystemExit("检测到的文字不够稳定，无法自动定位台词区")
 
     def band_boxes(band):
-        return [s for s in samples if band[0] - band_gap <= s[0] <= band[1] + band_gap]
+        return [s for s in samples if band[0] - BAND_GAP <= s[0] <= band[1] + BAND_GAP]
 
     def band_is_name_like(band):
         boxes = band_boxes(band)
@@ -138,9 +113,6 @@ def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
         persistent = persistent[1:]
         if not persistent:
             raise SystemExit("剔除人名带后无剩余文字，无法定位台词区")
-
-    # 同一对话框的多行台词若被拆成多条带，先合并再求范围
-    persistent = _merge_bands(persistent, band_gap)
 
     gb = []
     for band in persistent:

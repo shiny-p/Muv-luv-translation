@@ -188,7 +188,6 @@ def _refine_segments(segs, step, merge_text=True):
         s["box"] = _norm_box(s["box"])
     if merge_text:
         segs = _substring_merge(segs, step)
-        segs = _typewriter_merge(segs, step)
     segs = _line_group(segs, step)
     for i, s in enumerate(sorted(segs, key=lambda x: x["start"])):
         s["id"] = i
@@ -216,72 +215,6 @@ def _substring_merge(segs, step):
                 na, nb = _norm_text(a["text"]), _norm_text(b["text"])
                 if _vertical_ok(a, b) and (na in nb or nb in na):
                     merged = dict(b if len(b["text"]) > len(a["text"]) else a)
-                    merged["start"] = min(a["start"], b["start"])
-                    merged["end"] = max(a["end"], b["end"])
-                    merged["box"] = _union_bbox(a["box"], b["box"])
-                    segs[i] = merged
-                    del segs[j]
-                    changed = True
-                    continue
-                j += 1
-            i += 1
-    return segs
-
-
-def _edit_dist(a, b):
-    """简单编辑距离（用于短文本前缀容错）。"""
-    m, n = len(a), len(b)
-    if m > n:
-        a, b = b, a
-        m, n = n, m
-    if n - m > 8:
-        return 9
-    dp = list(range(n + 1))
-    for i, ca in enumerate(a, 1):
-        prev = dp[0]
-        dp[0] = i
-        for j, cb in enumerate(b, 1):
-            cur = dp[j]
-            dp[j] = min(dp[j] + 1, dp[j - 1] + 1, prev + (ca != cb))
-            prev = cur
-    return dp[-1]
-
-
-def _fuzzy_prefix_ok(short, long, tol):
-    """short 是否为 long 的开头（允许 tol 个字符的 OCR 误差）。"""
-    if not short or len(short) < 2 or len(long) < len(short):
-        return False
-    return _edit_dist(short, long[: len(short)]) <= tol
-
-
-def _typewriter_merge(segs, step):
-    """合并逐字显示(typewriter)产生的片段：
-    同一位置、时间相邻、且短文本≈长文本开头（允许打字瞬间 OCR 错字）的段，
-    合并为一条完整文本，时间取首尾并集。"""
-    segs = [dict(s) for s in segs]
-    changed = True
-    while changed:
-        changed = False
-        segs.sort(key=lambda s: (s["start"], s["end"]))
-        i = 0
-        while i < len(segs):
-            j = i + 1
-            while j < len(segs):
-                a, b = segs[i], segs[j]
-                if a["end"] < b["start"] - step:
-                    break
-                na, nb = _norm_text(a["text"]), _norm_text(b["text"])
-                if len(na) <= len(nb):
-                    short, long, sa, sb = na, nb, a, b
-                else:
-                    short, long, sa, sb = nb, na, b, a
-                tol = max(1, int(0.15 * len(short)))
-                if (
-                    len(short) >= 2
-                    and _vertical_ok(sa, sb)
-                    and _fuzzy_prefix_ok(short, long, tol)
-                ):
-                    merged = dict(sb)  # 保留较长(更完整)的文本
                     merged["start"] = min(a["start"], b["start"])
                     merged["end"] = max(a["end"], b["end"])
                     merged["box"] = _union_bbox(a["box"], b["box"])

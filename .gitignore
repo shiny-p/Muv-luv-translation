@@ -6,3 +6,5 @@ ocr/
 *.mp4
 translations.json
 *_output/
+
+.claude/
