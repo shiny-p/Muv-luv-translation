@@ -327,6 +327,31 @@ def _line_group(segs, step):
     return groups
 
 
+def _merge_near_duplicate_segments(segs, max_gap):
+    """合并局部 OCR 边界处同一位置、同一文本的重复段。"""
+    out = []
+    for source in sorted(segs, key=lambda s: (s["start"], s["end"])):
+        s = dict(source)
+        s["box"] = _norm_box(s["box"])
+        match = None
+        for candidate in reversed(out):
+            if s["start"] - candidate["end"] > max_gap:
+                break
+            if s["text"] == candidate["text"] and _iou(s["box"], candidate["box"]) > 0.3:
+                match = candidate
+                break
+        if match is None:
+            out.append(s)
+            continue
+        match["start"] = min(match["start"], s["start"])
+        match["end"] = max(match["end"], s["end"])
+        match["box"] = _union_bbox(match["box"], s["box"])
+        match["score"] = max(match.get("score", 0), s.get("score", 0))
+    for s in out:
+        s["box"] = np.round(s["box"]).astype(int).tolist()
+    return out
+
+
 def load_segments(path=None):
     path = path or resolve_segments_path()
     if not os.path.exists(path):
@@ -368,15 +393,8 @@ def _ocr_regions(cfg, w, h):
     return [("dialogue", 0, int(r["top"] * h), w, int(r["bottom"] * h))]
 
 
-def run_ocr(video, cfg, force=False):
-    seg_path = resolve_segments_path(video)
-    if os.path.exists(seg_path) and not force:
-        print("OCR 结果已存在，跳过（加 --force 强制重跑）")
-        return load_segments(seg_path)
-
+def _collect_detections(video, cfg, w, h, start_frame, end_frame, step):
     ocfg = cfg["ocr"]
-    w, h, fps, n = video_info(video)
-    step = max(1, int(ocfg["sample_step"]))
     min_score = float(ocfg["min_score"])
     min_area = float(ocfg["min_area"])
     max_chars = int(ocfg["max_text_chars"])
@@ -388,12 +406,13 @@ def run_ocr(video, cfg, force=False):
     cap = cv2.VideoCapture(video)
     if not cap.isOpened():
         raise RuntimeError("无法打开视频: %s" % video)
-    idx = 0
-    while True:
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+    idx = start_frame
+    while idx <= end_frame:
         ok, frame = cap.read()
         if not ok:
             break
-        if idx % step == 0:
+        if (idx - start_frame) % step == 0:
             keep = []
             for kind, rx0, ry0, rx1, ry1 in regions:
                 crop = frame[ry0:ry1, rx0:rx1]
@@ -416,6 +435,18 @@ def run_ocr(video, cfg, force=False):
                 detections[idx] = keep
         idx += 1
     cap.release()
+    return detections
+
+
+def run_ocr(video, cfg, force=False):
+    seg_path = resolve_segments_path(video)
+    if os.path.exists(seg_path) and not force:
+        print("OCR 结果已存在，跳过（加 --force 强制重跑）")
+        return load_segments(seg_path)
+
+    w, h, fps, n = video_info(video)
+    step = max(1, int(cfg["ocr"]["sample_step"]))
+    detections = _collect_detections(video, cfg, w, h, 0, max(0, n - 1), step)
 
     segments = _build_segments(detections, step)
     save_segments(video, segments, fps)
@@ -424,3 +455,83 @@ def run_ocr(video, cfg, force=False):
         % (len(segments), len(set(s["text"] for s in segments)))
     )
     return segments
+
+
+def run_ocr_range(
+    video,
+    cfg,
+    segment_id=None,
+    start_seconds=None,
+    end_seconds=None,
+    padding_seconds=1.0,
+):
+    """重识别一个已有字幕片段或指定时间段，并回写 segments.json。
+
+    局部 OCR 与全量 OCR 使用同一采样间隔，避免因加密采样捕捉逐字渲染的残片。
+    """
+    seg_path = resolve_segments_path(video)
+    if not os.path.exists(seg_path):
+        raise SystemExit("还没有 OCR 结果，请先运行: python run.py ocr <视频>")
+    if padding_seconds < 0:
+        raise SystemExit("--padding 不能小于 0")
+
+    with open(seg_path, encoding="utf-8") as f:
+        data = json.load(f)
+    old_segments = data.get("segments", [])
+    if not old_segments:
+        raise SystemExit("segments.json 中没有可重识别的字幕段")
+
+    w, h, fps, n = video_info(video)
+    if fps <= 0:
+        raise RuntimeError("无法读取视频帧率: %s" % video)
+
+    if segment_id is not None:
+        target = next((s for s in old_segments if s.get("id") == segment_id), None)
+        if target is None:
+            raise SystemExit("找不到编号为 %d 的字幕段" % segment_id)
+        target_start, target_end = int(target["start"]), int(target["end"])
+    else:
+        if start_seconds is None or end_seconds is None:
+            raise SystemExit("请指定 --segment，或同时指定 --start 与 --end")
+        if start_seconds < 0 or end_seconds < start_seconds:
+            raise SystemExit("时间范围无效：--start 必须 >= 0，且 --end 必须不早于 --start")
+        target_start = int(round(start_seconds * fps))
+        target_end = int(round(end_seconds * fps))
+
+    target_start = max(0, min(target_start, max(0, n - 1)))
+    target_end = max(target_start, min(target_end, max(0, n - 1)))
+    padding_frames = int(round(padding_seconds * fps))
+    scan_start = max(0, target_start - padding_frames)
+    scan_end = min(max(0, n - 1), target_end + padding_frames)
+    step = max(1, int(cfg["ocr"]["sample_step"]))
+
+    detections = _collect_detections(video, cfg, w, h, scan_start, scan_end, step)
+    rescanned = _build_segments(detections, step)
+    # 扩展范围只用于提供逐字显示的上下文；回写时只替换目标区间，避免影响邻句。
+    replacements = [
+        s for s in rescanned if s["end"] >= target_start and s["start"] <= target_end
+    ]
+    if not replacements:
+        raise SystemExit("局部 OCR 未得到可替换的结果，原 segments.json 未修改")
+    retained = [
+        s for s in old_segments if s["end"] < target_start or s["start"] > target_end
+    ]
+    merged = _merge_near_duplicate_segments(retained + replacements, step)
+    for i, segment in enumerate(merged):
+        segment["id"] = i
+
+    save_segments(video, merged, fps)
+    print(
+        "局部 OCR 完成：重识别 %.2f–%.2f 秒（扫描 %.2f–%.2f 秒，%d 帧采样），"
+        "替换 %d 段为 %d 段"
+        % (
+            target_start / fps,
+            target_end / fps,
+            scan_start / fps,
+            scan_end / fps,
+            step,
+            len(old_segments) - len(retained),
+            len(replacements),
+        )
+    )
+    return merged

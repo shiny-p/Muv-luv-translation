@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import re
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -44,6 +45,8 @@ FORMAT_SPEC = (
     "修改翻译只改 translation 的值；其余字段为程序生成，请勿改动或删除。"
     "除下划线开头的键外，其余键均为台词原文，不可重命名。"
 )
+
+REVIEW_SAMPLE_SIZE = 8
 
 
 def load_translations(path=None):
@@ -163,6 +166,19 @@ def _safe_translate(client, model, text, system_prompt):
     return None
 
 
+def _print_translation_review_sample(data, sample_size=REVIEW_SAMPLE_SIZE):
+    """输出随机原文—译文对，供智能体在翻译完成后检查文本异常。"""
+    candidates = sorted((source, translated) for source, translated in data.items() if translated)
+    if not candidates:
+        return
+    selected = random.sample(candidates, min(sample_size, len(candidates)))
+    print("翻译抽检：请智能体检查以下随机 %d/%d 条原文—译文对：" % (len(selected), len(candidates)))
+    for i, (source, translated) in enumerate(selected, 1):
+        print("  [%d] 日：%s" % (i, source))
+        print("      中：%s" % translated)
+    print("若发现乱码、无意义符号等明显非正常文本，请运行 python run.py translate <视频> --force 重新发起翻译后再检查。")
+
+
 def run_translate(cfg, force=False, video=None):
     segments_path = resolve_segments_path(video)
     segments = load_segments(segments_path)
@@ -197,12 +213,13 @@ def run_translate(cfg, force=False, video=None):
     data = load_translations(translations_path)
     terms = glossary_terms(load_glossary())
 
-    todo = [t for t in dialogue_texts if not data.get(t)]
-    if todo and not is_mock:
+    # --force 会重译所有非词典锁定的台词；词典词始终以既定译名为准。
+    todo = [t for t in dialogue_texts if force or not data.get(t)]
+    if todo:
         for t in list(todo):
             if terms.get(t):
                 data[t] = terms[t]
-        todo = [t for t in todo if not data.get(t)]
+        todo = [t for t in todo if not terms.get(t)]
 
     if todo:
         print("开始翻译 %d 条台词（%s / %s）..." % (len(todo), tcfg.get("provider"), model))
@@ -237,4 +254,5 @@ def run_translate(cfg, force=False, video=None):
     print("翻译完成：%d 条台词 → %s" % (len(data), translations_path))
     if missing:
         print("以下 %d 条翻译失败，可稍后重跑 translate 补齐：%s" % (len(missing), missing))
+    _print_translation_review_sample(data)
     return data
