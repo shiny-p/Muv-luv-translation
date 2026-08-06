@@ -376,31 +376,28 @@ def save_segments(video, segments, fps=0.0):
     return path
 
 
-def _ocr_regions(cfg, w, h):
-    ocfg = cfg["ocr"]
-    r = ocfg.get("dialogue_region")
-    if r:
-        return [
-            (
-                "dialogue",
-                int(r["left"] * w),
-                int(r["top"] * h),
-                int(r["right"] * w),
-                int(r["bottom"] * h),
-            )
-        ]
-    r = ocfg.get("region", {"top": 0.62, "bottom": 1.0})
-    return [("dialogue", 0, int(r["top"] * h), w, int(r["bottom"] * h))]
+def _ocr_regions(dialogue_region, w, h):
+    if not dialogue_region:
+        raise ValueError("缺少该视频的台词区")
+    return [
+        (
+            "dialogue",
+            int(dialogue_region["left"] * w),
+            int(dialogue_region["top"] * h),
+            int(dialogue_region["right"] * w),
+            int(dialogue_region["bottom"] * h),
+        )
+    ]
 
 
-def _collect_detections(video, cfg, w, h, start_frame, end_frame, step):
+def _collect_detections(video, cfg, dialogue_region, w, h, start_frame, end_frame, step):
     ocfg = cfg["ocr"]
     min_score = float(ocfg["min_score"])
     min_area = float(ocfg["min_area"])
     max_chars = int(ocfg["max_text_chars"])
     require_jp = bool(ocfg["require_japanese"])
     backend = _make_backend(cfg)
-    regions = _ocr_regions(cfg, w, h)
+    regions = _ocr_regions(dialogue_region, w, h)
 
     detections = {}
     cap = cv2.VideoCapture(video)
@@ -438,7 +435,7 @@ def _collect_detections(video, cfg, w, h, start_frame, end_frame, step):
     return detections
 
 
-def run_ocr(video, cfg, force=False):
+def run_ocr(video, cfg, dialogue_region, force=False):
     seg_path = resolve_segments_path(video)
     if os.path.exists(seg_path) and not force:
         print("OCR 结果已存在，跳过（加 --force 强制重跑）")
@@ -446,7 +443,7 @@ def run_ocr(video, cfg, force=False):
 
     w, h, fps, n = video_info(video)
     step = max(1, int(cfg["ocr"]["sample_step"]))
-    detections = _collect_detections(video, cfg, w, h, 0, max(0, n - 1), step)
+    detections = _collect_detections(video, cfg, dialogue_region, w, h, 0, max(0, n - 1), step)
 
     segments = _build_segments(detections, step)
     save_segments(video, segments, fps)
@@ -460,6 +457,7 @@ def run_ocr(video, cfg, force=False):
 def run_ocr_range(
     video,
     cfg,
+    dialogue_region,
     segment_id=None,
     start_seconds=None,
     end_seconds=None,
@@ -505,7 +503,7 @@ def run_ocr_range(
     scan_end = min(max(0, n - 1), target_end + padding_frames)
     step = max(1, int(cfg["ocr"]["sample_step"]))
 
-    detections = _collect_detections(video, cfg, w, h, scan_start, scan_end, step)
+    detections = _collect_detections(video, cfg, dialogue_region, w, h, scan_start, scan_end, step)
     rescanned = _build_segments(detections, step)
     # 扩展范围只用于提供逐字显示的上下文；回写时只替换目标区间，避免影响邻句。
     replacements = [

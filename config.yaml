@@ -7,11 +7,6 @@ ocr:
   min_area: 200
   max_text_chars: 80
   require_japanese: true
-  dialogue_region:
-    left: 0.225
-    top: 0.775
-    right: 0.706
-    bottom: 0.922
 translation:
   provider: deepseek
   base_url: https://api.deepseek.com

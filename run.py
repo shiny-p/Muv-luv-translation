@@ -4,7 +4,7 @@ import sys
 
 from core import config
 from core.ocr import run_ocr, run_ocr_range
-from core.regions import detect_dialogue_region
+from core.regions import detect_dialogue_region, load_dialogue_region, save_dialogue_region
 from core.render import run_render
 from core.translate import run_translate
 
@@ -18,10 +18,26 @@ def _video(arg):
     return video
 
 
-def _detect_region(video, cfg):
-    region = detect_dialogue_region(video, cfg)
-    config.persist_dialogue_region(region)
-    return region
+def _parse_region(video, value):
+    try:
+        left, top, right, bottom = (float(x.strip()) for x in value.split(","))
+    except (AttributeError, ValueError):
+        raise SystemExit("--region 格式应为 left,top,right,bottom，例如 0.223,0.774,0.746,0.923")
+    try:
+        return save_dialogue_region(
+            video,
+            {"left": left, "top": top, "right": right, "bottom": bottom},
+        )
+    except ValueError as exc:
+        raise SystemExit("--region 无效：%s" % exc)
+
+
+def _get_region(video, cfg, redetect=False, region_text=None):
+    if region_text:
+        return _parse_region(video, region_text)
+    if redetect:
+        return detect_dialogue_region(video, cfg)
+    return load_dialogue_region(video) or detect_dialogue_region(video, cfg)
 
 
 def main():
@@ -29,11 +45,13 @@ def main():
     sub = ap.add_subparsers(dest="cmd")
 
     sub.add_parser("init", help="生成 config.yaml 配置模板")
-    p = sub.add_parser("regions", help="检测台词区并生成校验截图（写入 config.yaml）")
+    p = sub.add_parser("regions", help="检测台词区并生成校验截图（写入该视频的 region.json）")
     p.add_argument("video", help="视频文件路径")
     p = sub.add_parser("ocr", help="第1步：检测台词区 + 字幕文字识别")
     p.add_argument("video", help="视频文件路径")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--redetect-region", action="store_true", help="忽略已有 region.json，重新检测台词区")
+    p.add_argument("--region", help="手工指定并保存台词区：left,top,right,bottom（相对坐标）")
     p = sub.add_parser("ocr-range", help="局部重做 OCR（需已有 segments.json）")
     p.add_argument("video", help="视频文件路径")
     target = p.add_mutually_exclusive_group(required=True)
@@ -41,6 +59,8 @@ def main():
     target.add_argument("--start", type=float, help="要重识别范围的起始秒数（须配合 --end）")
     p.add_argument("--end", type=float, help="要重识别范围的结束秒数")
     p.add_argument("--padding", type=float, default=1.0, help="目标前后额外扫描秒数（默认 1）")
+    p.add_argument("--redetect-region", action="store_true", help="忽略已有 region.json，重新检测台词区")
+    p.add_argument("--region", help="手工指定并保存台词区：left,top,right,bottom（相对坐标）")
     p = sub.add_parser("translate", help="第2步：翻译为简体中文（可带视频名定位输出文件夹）")
     p.add_argument("video", nargs="?", help="视频文件路径（可选）")
     p.add_argument("--force", action="store_true")
@@ -50,6 +70,8 @@ def main():
     p = sub.add_parser("all", help="一键执行 完整流程（自动检测台词区）")
     p.add_argument("video", help="视频文件路径")
     p.add_argument("--force", action="store_true")
+    p.add_argument("--redetect-region", action="store_true", help="忽略已有 region.json，重新检测台词区")
+    p.add_argument("--region", help="手工指定并保存台词区：left,top,right,bottom（相对坐标）")
 
     args = ap.parse_args()
     if not args.cmd:
@@ -67,20 +89,22 @@ def main():
     cfg = config.load_config()
     if args.cmd == "regions":
         video = _video(getattr(args, "video", None))
-        _detect_region(video, cfg)
+        detect_dialogue_region(video, cfg)
     elif args.cmd == "ocr":
         video = _video(getattr(args, "video", None))
-        _detect_region(video, cfg)
-        run_ocr(video, cfg, force=args.force)
+        region = _get_region(video, cfg, args.redetect_region, args.region)
+        run_ocr(video, cfg, region, force=args.force)
     elif args.cmd == "ocr-range":
         if args.start is not None and args.end is None:
             raise SystemExit("使用 --start 时必须同时指定 --end")
         if args.start is None and args.end is not None:
             raise SystemExit("--end 必须与 --start 一起使用")
         video = _video(args.video)
+        region = _get_region(video, cfg, args.redetect_region, args.region)
         run_ocr_range(
             video,
             cfg,
+            region,
             segment_id=args.segment,
             start_seconds=args.start,
             end_seconds=args.end,
@@ -94,8 +118,8 @@ def main():
         run_render(cfg, force=args.force, video=video)
     elif args.cmd == "all":
         video = _video(getattr(args, "video", None))
-        _detect_region(video, cfg)
-        run_ocr(video, cfg, force=args.force)
+        region = _get_region(video, cfg, args.redetect_region, args.region)
+        run_ocr(video, cfg, region, force=args.force)
         run_translate(cfg, force=args.force, video=video)
         run_render(cfg, force=args.force, video=video)
 

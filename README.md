@@ -10,10 +10,10 @@
 
 ```
 输入视频（命令行参数传入，如 1.mp4）
-  ├─ 0. 检测台词区  每个视频处理前自动检测（也可单独运行 run.py regions <视频>）
-  │        抽帧 OCR → 按位置聚类出「台词区」→ 写入 config.yaml
+  ├─ 0. 检测台词区  首次处理视频时自动检测（也可单独运行 run.py regions <视频>）
+  │        抽帧 OCR → 按位置聚类出「台词区」→ 写入 <视频名>_output/region.json
   │        → 生成 4 张校验截图 <视频名>_output/region_check_*.png（绿框=检测到的台词区，**必须人工确认绿框只框住台词、不含人名标签/HUD 杂字**）
-  ├─ 1. OCR       按设定间隔抽帧 → 只在台词区内识别 → 字幕段聚合/精修
+  ├─ 1. OCR       读取该视频的 region.json → 按设定间隔抽帧 → 只在台词区内识别 → 字幕段聚合/精修
   │        → **OCR 完成后，智能体必须完整检查 `segments.json` 的全部文本。发现乱码、无意义符号等明显不属于正常文本的内容时，优先进行局部 OCR 重识别后再翻译；不要求理解或校对具体台词内容。**
   ├─ 2. 翻译      台词中的词典词(glossary.json)先占位保护；其余文本并发调用翻译模型（已关闭思考模式）
   │               结果写入 translations.json（原文+译文+时间戳整合在一条记录里），可手工校对
@@ -23,6 +23,7 @@
          output.mp4        最终视频（保留原音频）
          translations.json 该视频的翻译与时间戳
          segments.json     OCR 缓存
+         region.json       该视频的台词区（可手工编辑）
          region_check_*.png 台词区校验截图
          <视频名>.mp4      渲染完成后原视频被移动到该文件夹
 ```
@@ -45,7 +46,7 @@
 | 路径 | 说明 |
 |---|---|
 | `run.py` | 命令入口（regions / ocr / translate / render / all / init） |
-| `config.yaml` | 全部配置（供应商、渲染参数；台词区自动检测写入） |
+| `config.yaml` | 全局配置（OCR、翻译供应商、渲染参数；不保存视频专属台词区） |
 | `.env` | 密钥环境变量（DeepSeek key），**勿提交/外泄** |
 | `requirements.txt` | Python 依赖 |
 | `core/` | 核心代码 |
@@ -56,7 +57,7 @@
 | ├─ `video.py` | 视频信息、ffmpeg 管道编码 |
 | └─ `config.py` | 配置加载/默认值/.env |
 | `glossary.json` | **翻译词典**：`names`（人名）+ `proper_nouns`（专有名词），台词中出现时按译名直接替换 |
-| `<视频名>_output/` | 该视频的全部文件（原视频、成品、翻译、OCR缓存、校验截图） |
+| `<视频名>_output/` | 该视频的全部文件（原视频、成品、翻译、OCR缓存、台词区、校验截图） |
 | `backups/` | 历次优化前的核心代码备份（`regions.py.bak` / `ocr.py.bak`），需回退时复制回 `core/` 即可 |
 
 > 处理完一个视频后，与其有关的所有文件都收进 `<视频名>_output/`，根目录保持整洁。
@@ -75,20 +76,24 @@
 ## 使用步骤
 
 ```bash
-# 一键全流程（自动检测台词区 → OCR → 翻译 → 渲染，输出在 1_output/）
+# 一键全流程（首次自动检测台词区 → OCR → 翻译 → 渲染，输出在 1_output/）
 .venv/bin/python run.py all 1.mp4
 
 # 或分步执行
-.venv/bin/python run.py regions 1.mp4        # ① 仅检测台词区 + 生成校验截图
-.venv/bin/python run.py ocr 1.mp4            # ② 检测台词区 + 文字识别
+.venv/bin/python run.py regions 1.mp4        # ① 仅检测台词区 + 生成校验截图 + 写入 region.json
+.venv/bin/python run.py ocr 1.mp4            # ② 使用该视频的 region.json 做文字识别
 .venv/bin/python run.py ocr-range 1.mp4 --segment 12  # 发现第 12 段错误时，仅重识别该段
 .venv/bin/python run.py ocr-range 1.mp4 --start 123.4 --end 127.8  # 或按秒指定范围
+.venv/bin/python run.py ocr 1.mp4 --redetect-region  # 忽略已有区域并重新检测
+.venv/bin/python run.py ocr 1.mp4 --region 0.223,0.774,0.746,0.923  # 手工指定并保存区域
 .venv/bin/python run.py translate 1.mp4      # ③ 翻译（可省略视频名，自动定位）
 .venv/bin/python run.py translate 1.mp4 --force  # 抽检发现明显误译时，强制重新发起翻译
 .venv/bin/python run.py render 1.mp4         # ④ 渲染（也可省略视频参数）
 ```
 
-> 校验截图生成在 `<视频名>_output/region_check_*.png`，**每次处理前必须打开检查识别是否干净**：绿框应只框住台词区——既不能漏掉台词，也不能框入顶部人名标签、右上角计时器等杂字。识别是否干净直接决定后续 OCR 与翻译质量。若不准，可手动改 `config.yaml` 的 `ocr.dialogue_region` 后重跑 `ocr`。
+> 校验截图生成在 `<视频名>_output/region_check_*.png`，**首次处理或重新检测区域后必须打开检查**：绿框应只框住台词区——既不能漏掉台词，也不能框入顶部人名标签、右上角计时器等杂字。识别是否干净直接决定后续 OCR 与翻译质量。若不准，编辑该视频输出目录的 `region.json`，或用 `--region left,top,right,bottom` 保存手工区域后重跑 `ocr --force`；区域文件不会影响其他视频。
+
+**台词区的保存与手工调整**：`<视频名>_output/region.json` 是该视频专属的台词区（`left`、`top`、`right`、`bottom` 均为 0～1 的相对坐标）。首次 `ocr`、`ocr-range` 或 `all` 在文件缺失时会自动检测并保存；以后会复用该文件，不会改写 `config.yaml`，不同视频互不影响。需要重新检测时添加 `--redetect-region`；需要人工微调时直接编辑该 JSON，或通过 `--region left,top,right,bottom` 保存。手动修改区域后请使用 `ocr --force` 重跑完整 OCR。
 
 **OCR 完成后的全文检查与局部重识别**：智能体必须完整检查 `<视频名>_output/segments.json` 中每一条 `text`。这里的“明显错误”仅指乱码、无意义符号、无法构成正常文本的残片等，无需理解台词含义，也不要求判断一般错字、漏字或文本内容是否正确。发现此类问题时，不必重跑完整视频，优先使用 `ocr-range`：
 - `--segment <id>` 使用 `segments.json` 每条记录的 `id`；也可用 `--start <秒> --end <秒>` 指定范围。
@@ -118,7 +123,7 @@
 
 | 字段 | 作用 |
 |---|---|
-| `ocr.dialogue_region` | 台词区（相对坐标 0~1），每个视频处理前自动检测写入；不准可手改 |
+| `<视频名>_output/region.json` | 台词区（相对坐标 0~1）；首次自动检测写入，不准可手改，不影响其他视频 |
 | `ocr.sample_step` | 每多少帧抽 1 帧识别（默认 48 ≈ 60fps 下 800ms 一次；**不要低于 24**，过密会捕捉逐字渲染中途的不稳定框） |
 | `translation.provider` | `deepseek` / `openai` / `qwen` / `mock`（mock 免 key，用于流程验证） |
 | `translation.model` | 模型名，如 `deepseek-v4-flash`（程序已自动关闭思考模式以提速） |
@@ -132,8 +137,8 @@
 
 - **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`
 - **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash`）；程序已禁用思考模式并启用 6 路并发，数百条台词通常 1~3 分钟完成
-- **台词区不准 / 识别不干净**：查看 `region_check_*.png`，确认绿框只框住台词；若框入了人名标签、计时器等杂字，手动收紧 `ocr.dialogue_region` 后重跑 `ocr`
-- **人名/说话人标签被识别进去了**：本工具不识别、不翻译人名标签。出现说明台词区框得太松，收紧区域后重跑 `ocr`
+- **台词区不准 / 识别不干净**：查看 `region_check_*.png`，确认绿框只框住台词；若框入了人名标签、计时器等杂字，手动收紧该视频 `region.json` 或使用 `--region` 后重跑 `ocr --force`
+- **人名/说话人标签被识别进去了**：本工具不识别、不翻译人名标签。出现说明台词区框得太松，收紧该视频区域后重跑 `ocr --force`
 - **字幕逐字显示导致碎片/重复**：程序已自动用模糊前缀合并把打字前缀链合并为完整句；保持 `ocr.sample_step` ≥ 24 即可。若仍有局部文本残留，可临时把 `sample_step` 调到 32 左右或手动清理 `segments.json`
 - **人名/专有名词译名不一致**：在 `glossary.json` 里统一填写后重跑 `translate`
 - **个别翻译失败**：重跑 `translate` 会只补齐失败的条目（带重试）

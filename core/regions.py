@@ -1,3 +1,4 @@
+import json
 import os
 
 import cv2
@@ -14,6 +15,54 @@ PAD_FRAC = 0.02
 DIAL_MAX_X = 0.80
 NAME_MAX_X_SPAN = 0.35
 SCREENSHOT_COUNT = 4
+REGION_FILENAME = "region.json"
+
+
+def region_path(video):
+    return os.path.join(video_output_dir(video), REGION_FILENAME)
+
+
+def _validate_dialogue_region(region):
+    if not isinstance(region, dict):
+        raise ValueError("台词区必须是对象")
+    try:
+        left = float(region["left"])
+        top = float(region["top"])
+        right = float(region["right"])
+        bottom = float(region["bottom"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("台词区必须含 left、top、right、bottom 四个数字") from exc
+    if not (0 <= left < right <= 1 and 0 <= top < bottom <= 1):
+        raise ValueError("台词区坐标必须满足 0 ≤ left < right ≤ 1，0 ≤ top < bottom ≤ 1")
+    return {
+        "left": round(left, 6),
+        "top": round(top, 6),
+        "right": round(right, 6),
+        "bottom": round(bottom, 6),
+    }
+
+
+def save_dialogue_region(video, dialogue_region):
+    """保存该视频专属的台词区，供 OCR 与局部 OCR 复用。"""
+    region = _validate_dialogue_region(dialogue_region)
+    out_dir = video_output_dir(video)
+    os.makedirs(out_dir, exist_ok=True)
+    path = region_path(video)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"video": video, "dialogue_region": region}, f, ensure_ascii=False, indent=2)
+    return region
+
+
+def load_dialogue_region(video):
+    path = region_path(video)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return _validate_dialogue_region(data.get("dialogue_region"))
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        raise SystemExit("台词区文件无效，请修正或重新检测: %s（%s）" % (path, exc))
 
 
 def _to_fraction(x0, y0, x1, y1, w, h, pad):
@@ -148,7 +197,7 @@ def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
             if ((s[1] + s[3]) / 2) / w <= DIAL_MAX_X:
                 gb.append([s[1], s[2], s[3], s[4]])
     if not gb:
-        raise SystemExit("台词区检测失败，请手动填写 dialogue_region")
+        raise SystemExit("台词区检测失败，请手工编辑 region.json 或使用 --region 指定区域")
     arr = np.array(gb, dtype=np.float64)
     dialogue_region = _to_fraction(arr[:, 0].min(), arr[:, 1].min(),
                                    arr[:, 2].max(), arr[:, 3].max(), w, h, PAD_FRAC)
@@ -173,5 +222,6 @@ def detect_dialogue_region(video, cfg, sample_count=SAMPLE_COUNT):
     print("已生成 %d 张校验截图（绿色框为检测到的台词区，请确认后继续）:" % len(saved))
     for p in saved:
         print("  %s" % p)
-    print("已写入 config.yaml（若不准可手动修改后重跑 ocr）")
+    dialogue_region = save_dialogue_region(video, dialogue_region)
+    print("已写入 %s（若不准可手动修改后重跑 ocr）" % region_path(video))
     return dialogue_region

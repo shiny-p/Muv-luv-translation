@@ -30,7 +30,7 @@ TEMPLATE = """\
 # 视频日语字幕 → 简体中文 翻译工具 配置
 # 视频路径通过命令行参数传入（例如: python run.py all 0_1_1.mp4），不写在此处。
 # 修改保存后重跑会自动跳过已完成步骤。
-# 台词区会在每个视频处理前自动检测并写入，无需手工填写；也可用 `python run.py regions <视频>` 单独检测
+# 台词区会按视频保存到 <视频名>_output/region.json；也可用 `python run.py regions <视频>` 单独检测
 output: output.mp4             # 输出视频文件名（放在 <视频名>_output/ 文件夹内）
 
 ocr:                           # ---- 文字识别 ----
@@ -41,11 +41,6 @@ ocr:                           # ---- 文字识别 ----
   min_area: 200                # 最小文字框面积(像素)，过滤噪点
   max_text_chars: 80           # 单条字幕最大字数
   require_japanese: true       # 只保留含日文字符的识别结果
-  dialogue_region:             # 台词区（相对坐标 0~1），自动检测后写入
-    left: 0.24
-    top: 0.79
-    right: 0.67
-    bottom: 0.90
 
 translation:                   # ---- 文本翻译 ----
   provider: deepseek           # deepseek | openai | qwen | mock(本地测试用，不需要 key)
@@ -81,8 +76,6 @@ DEFAULTS = {
         "min_area": 200,
         "max_text_chars": 80,
         "require_japanese": True,
-        "region": {"top": 0.62, "bottom": 1.0},
-        "dialogue_region": None,
     },
     "translation": {
         "provider": "deepseek",
@@ -135,18 +128,6 @@ def load_config():
     return deep_merge(DEFAULTS, cfg)
 
 
-def persist_dialogue_region(dialogue_region):
-    with open(CONFIG_PATH, encoding="utf-8") as f:
-        cfg = yaml.safe_load(f) or {}
-    ocfg = cfg.setdefault("ocr", {})
-    ocfg.pop("region", None)
-    ocfg.pop("name_region", None)
-    if dialogue_region:
-        ocfg["dialogue_region"] = dialogue_region
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
-
-
 def resolve_api_key(cfg):
     key = (cfg.get("api_key") or "").strip()
     env = cfg.get("api_key_env") or ""
@@ -165,7 +146,13 @@ def video_stem(video):
 
 
 def video_output_dir(video):
-    return os.path.join(ROOT, video_stem(video) + "_output")
+    stem = video_stem(video)
+    parent = os.path.dirname(os.path.abspath(video))
+    # 渲染完成后原视频会被移入 <视频名>_output/；此时继续使用该目录，
+    # 避免根据 03_output/03.mp4 再生成 03_output/03_output/。
+    if os.path.basename(parent) == stem + "_output":
+        return parent
+    return os.path.join(ROOT, stem + "_output")
 
 
 def recent_output_dir():
