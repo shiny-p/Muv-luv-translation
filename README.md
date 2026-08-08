@@ -41,7 +41,7 @@
 - 合并后文本取链中最完整的一句，时间取整条链的并集（第一字出现 → 整句清空），字幕显示时长更准确。
 
 采样间隔建议：
-- 保持 `ocr.sample_step = 48`（60fps 下约 800ms 一次）。逐字模式完整句在“停留期”必然被采到，配合模糊前缀合并即可还原，无需提高采样密度。
+- 保持 `ocr.sample_step = 48`（60fps 下约 800ms 一次）。逐字模式完整句在“停留期”必然被采到，配合模糊合并即可还原，无需加密。
 - **不要低于 24**：过密采样（≈200~400ms）会捕捉到字符渲染中途的不稳定框（残影），合并救不回来，反而产生更多碎片并显著增加耗时。
 - 若个别视频打字极快且停留极短导致某句始终只采到局部文本，可临时把 `sample_step` 降到 32 左右（仍不建议低于 24）。
 
@@ -64,14 +64,13 @@
 | `glossary.json` | **翻译词典**：`names`（人名）+ `proper_nouns`（专有名词），台词中出现时按译名直接替换 |
 | `<视频名>_output/` | 该视频的全部文件（原始视频、CFR 视频、成品、翻译、OCR缓存、台词区、校验截图） |
 | `backups/` | 程序完整备份（按时间戳归档全部源码与配置），需回退时把对应子目录内容复制回项目根即可 |
-| `tools/region_selector/` | 手动框选台词区工具（最后手段）：浏览器打开 `selector.html` 拖框选台词区并输出归一化坐标；示例画面在 `frames/`（已 gitignore） |
 
 > 处理完一个视频后，与其有关的所有文件都收进 `<视频名>_output/`，根目录保持整洁。
 
 ## 环境准备（一次性）
 
 ```bash
-python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebrew/bin/python3.12）
+/opt/homebrew/bin/python3.12 -m venv .venv
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python run.py init      # 生成 config.yaml
@@ -86,16 +85,16 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 .venv/bin/python run.py all 1.mp4
 
 # 或分步执行
-.venv/bin/python run.py cfr 1.mp4            # ① 转恒定帧率(CFR)，原始视频与 CFR 视频一并放入 1_output/
+.venv/bin/python run.py cfr 1.mp4            # ① 转恒定帧率(CFR)，原始视频与CFR视频一并放入 1_output/
 .venv/bin/python run.py regions 1.mp4        # ② 仅检测台词区 + 生成校验截图 + 写入 region.json
-.venv/bin/python run.py ocr 1.mp4            # ③ 使用该视频的 region.json 做文字识别
-.venv/bin/python run.py ocr-range 1.mp4 --segment 12  # ③ 局部重识别：仅重做第 12 段（或用 --start/--end 按秒指定范围）
-.venv/bin/python run.py ocr-range 1.mp4 --start 123.4 --end 127.8  # ③ 局部重识别：按秒指定范围
-.venv/bin/python run.py ocr 1.mp4 --redetect-region  # ③ 忽略已有区域，重新检测
-.venv/bin/python run.py ocr 1.mp4 --region 0.223,0.774,0.746,0.923  # ③ 手工指定并保存区域
-.venv/bin/python run.py translate 1.mp4      # ④ 翻译（可省略视频名，自动定位）
-.venv/bin/python run.py translate 1.mp4 --force  # ④ 抽检发现明显误译时，强制重新发起翻译
-.venv/bin/python run.py render 1.mp4         # ⑤ 渲染（也可省略视频参数）
+.venv/bin/python run.py ocr 1.mp4            # ② 使用该视频的 region.json 做文字识别
+.venv/bin/python run.py ocr-range 1.mp4 --segment 12  # 发现第 12 段错误时，仅重识别该段
+.venv/bin/python run.py ocr-range 1.mp4 --start 123.4 --end 127.8  # 或按秒指定范围
+.venv/bin/python run.py ocr 1.mp4 --redetect-region  # 忽略已有区域并重新检测
+.venv/bin/python run.py ocr 1.mp4 --region 0.223,0.774,0.746,0.923  # 手工指定并保存区域
+.venv/bin/python run.py translate 1.mp4      # ③ 翻译（可省略视频名，自动定位）
+.venv/bin/python run.py translate 1.mp4 --force  # 抽检发现明显误译时，强制重新发起翻译
+.venv/bin/python run.py render 1.mp4         # ④ 渲染（也可省略视频参数）
 ```
 
 > 校验截图生成在 `<视频名>_output/region_check_*.png`，**首次处理或重新检测区域后必须打开检查**：绿框应只框住台词区——既不能漏掉台词，也不能框入顶部人名标签、右上角计时器等杂字。识别是否干净直接决定后续 OCR 与翻译质量。若不准，编辑该视频输出目录的 `region.json`，或用 `--region left,top,right,bottom` 保存手工区域后重跑 `ocr --force`；区域文件不会影响其他视频。
@@ -132,21 +131,6 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 ```
 - 改完保存，运行 `run.py render 1.mp4` 重新生成视频即可生效
 
-## 手动框选台词区（最后手段）
-
-自动检测不准时（典型：说话人名嵌在对话框顶部的游戏，算法无法剔除框内人名行），可以用项目自带的框选工具手动指定台词区：
-
-1. 用浏览器打开 `tools/region_selector/selector.html`（附 4 张示例画面，也可直接把任意截图拖进页面）；
-2. 按住鼠标左键拖一个矩形，**只框住台词正文**（不要框顶部说话人名、不要漏台词），切换几个示例画面确认；
-3. 点击「复制坐标」，得到归一化坐标 `left,top,right,bottom`（0~1）；
-4. 写入该视频的 `<视频名>_output/region.json`，或直接执行：
-
-   `.venv/bin/python run.py ocr <视频> --region left,top,right,bottom`（会自动保存 region.json）
-
-5. 重跑 `.venv/bin/python run.py ocr <视频> --force` → `.venv/bin/python run.py translate <视频>` → `.venv/bin/python run.py render <视频>`。
-
-> 示例画面帧存放在 `tools/region_selector/frames/`（已 gitignore，不入库）；工具本身支持拖入任意分辨率截图，坐标按原图尺寸归一化。
-
 ## 配置项速查（config.yaml）
 
 | 字段 | 作用 |
@@ -154,34 +138,21 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | `<视频名>_output/region.json` | 台词区（相对坐标 0~1）；首次自动检测写入，不准可手改，不影响其他视频 |
 | `ocr.sample_step` | 每多少帧抽 1 帧识别（默认 48 ≈ 60fps 下 800ms 一次；**不要低于 24**，过密会捕捉逐字渲染中途的不稳定框） |
 | `cfr.fps` | CFR 目标帧率，0=自动（先取 `render.fps`，否则源视频帧率四舍五入） |
-| `cfr.crf` / `cfr.preset` | CFR 转换质量/速度（crf 默认 18；preset 默认 fast，仓库 config.yaml 已改为 veryfast 提速） |
+| `cfr.crf` / `cfr.preset` | CFR 转换质量/速度（默认 18 / fast，与渲染同参数） |
 | `cfr.suffix` | CFR 文件名后缀（默认 `_cfr`，即 `<视频名>_cfr.mp4`） |
 | `translation.provider` | `deepseek` / `openai` / `qwen` / `mock`（mock 免 key，用于流程验证） |
 | `translation.model` | 模型名，如 `deepseek-v4-flash`（程序已自动关闭思考模式以提速） |
 | `render.append_height` | 底部加高像素（默认 160） |
 | `render.append_bg` | 条带底色：`auto`（匹配台词框暖灰，推荐）/ `black` / `#RRGGBB` |
-| `render.width` | 输出宽度，0=保持原分辨率（仓库 config.yaml 已设为 1280 提速） |
-| `render.preset` / `render.crf` | 渲染编码速度/质量（仓库 config.yaml 已设为 veryfast / 18） |
+| `render.width` | 输出宽度，0=保持原分辨率 |
 | `render.font_scale` | 全局字号 = 字幕框高度中位数 × 此系数 |
 | `render.test_frames` | 调试用：只渲染前 N 帧（0=全部） |
-
-## 加速选项（--jobs）
-
-OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧识别：
-
-- `.venv/bin/python run.py ocr 1.mp4 --jobs 4`：用 4 个进程并行 OCR（每个进程约 2 个推理线程）
-- `.venv/bin/python run.py all 1.mp4 --jobs 4`：整条流水线同样生效
-- `.venv/bin/python run.py ocr-range 1.mp4 --segment 12 --jobs 4`：局部重识别同样生效
-- 不传 `--jobs` 时自动按 CPU 核数选择：≤2 核不并行；否则取核数一半（上限 8）。多核机器上可自行调大（如 `--jobs 8`）
-- 并行只影响耗时，不影响结果：每帧的识别逻辑与串行完全一致，抽样帧与合并规则不变
-
-> 提示：在核数多的服务器（如 8C16G ECS）上，`--jobs` 的收益比笔记本更大，因为云 CPU 单核较弱、多进程并行能更好吃满多核。
 
 ## 常见问题
 
 - **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`
 - **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash`）；程序已禁用思考模式并启用 6 路并发，数百条台词通常 1~3 分钟完成
-- **台词区不准 / 识别不干净**：查看 `region_check_*.png`，确认绿框只框住台词；若框入了人名标签、计时器等杂字，手动收紧该视频 `region.json` 或使用 `--region` 后重跑 `ocr --force`；若自动检测始终不准（如人名嵌在对话框顶部的游戏），用 `tools/region_selector/selector.html` 手动框选（见「手动框选台词区」）
+- **台词区不准 / 识别不干净**：查看 `region_check_*.png`，确认绿框只框住台词；若框入了人名标签、计时器等杂字，手动收紧该视频 `region.json` 或使用 `--region` 后重跑 `ocr --force`
 - **人名/说话人标签被识别进去了**：本工具不识别、不翻译人名标签。出现说明台词区框得太松，收紧该视频区域后重跑 `ocr --force`
 - **字幕逐字显示导致碎片/重复**：程序已自动用模糊前缀合并把打字前缀链合并为完整句；保持 `ocr.sample_step` ≥ 24 即可。若仍有局部文本残留，可临时把 `sample_step` 调到 32 左右或手动清理 `segments.json`
 - **人名/专有名词译名不一致**：在 `glossary.json` 里统一填写后重跑 `translate`
