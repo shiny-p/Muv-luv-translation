@@ -64,6 +64,7 @@
 | `glossary.json` | **翻译词典**：`names`（人名）+ `proper_nouns`（专有名词），台词中出现时按译名直接替换 |
 | `<视频名>_output/` | 该视频的全部文件（原始视频、CFR 视频、成品、翻译、OCR缓存、台词区、校验截图） |
 | `backups/` | 程序完整备份（按时间戳归档全部源码与配置），需回退时把对应子目录内容复制回项目根即可 |
+| `tools/region_selector/` | 手动框选台词区工具（最后手段）：浏览器打开 `selector.html` 拖框选台词区并输出归一化坐标；示例画面在 `frames/`（已 gitignore） |
 
 > 处理完一个视频后，与其有关的所有文件都收进 `<视频名>_output/`，根目录保持整洁。
 
@@ -131,6 +132,21 @@
 ```
 - 改完保存，运行 `run.py render 1.mp4` 重新生成视频即可生效
 
+## 手动框选台词区（最后手段）
+
+自动检测不准时（典型：说话人名嵌在对话框顶部的游戏，算法无法剔除框内人名行），可以用项目自带的框选工具手动指定台词区：
+
+1. 用浏览器打开 `tools/region_selector/selector.html`（附 4 张示例画面，也可直接把任意截图拖进页面）；
+2. 按住鼠标左键拖一个矩形，**只框住台词正文**（不要框顶部说话人名、不要漏台词），切换几个示例画面确认；
+3. 点击「复制坐标」，得到归一化坐标 `left,top,right,bottom`（0~1）；
+4. 写入该视频的 `<视频名>_output/region.json`，或直接执行：
+
+   `.venv/bin/python run.py ocr <视频> --region left,top,right,bottom`（会自动保存 region.json）
+
+5. 重跑 `.venv/bin/python run.py ocr <视频> --force` → `.venv/bin/python run.py translate <视频>` → `.venv/bin/python run.py render <视频>`。
+
+> 示例画面帧存放在 `tools/region_selector/frames/`（已 gitignore，不入库）；工具本身支持拖入任意分辨率截图，坐标按原图尺寸归一化。
+
 ## 配置项速查（config.yaml）
 
 | 字段 | 作用 |
@@ -147,6 +163,18 @@
 | `render.width` | 输出宽度，0=保持原分辨率 |
 | `render.font_scale` | 全局字号 = 字幕框高度中位数 × 此系数 |
 | `render.test_frames` | 调试用：只渲染前 N 帧（0=全部） |
+
+## 加速选项（--jobs）
+
+OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧识别：
+
+- `.venv/bin/python run.py ocr 1.mp4 --jobs 4`：用 4 个进程并行 OCR（每个进程约 2 个推理线程）
+- `.venv/bin/python run.py all 1.mp4 --jobs 4`：整条流水线同样生效
+- `.venv/bin/python run.py ocr-range 1.mp4 --segment 12 --jobs 4`：局部重识别同样生效
+- 不传 `--jobs` 时自动按 CPU 核数选择：≤2 核不并行；否则取核数一半（上限 8）。多核机器上可自行调大（如 `--jobs 8`）
+- 并行只影响耗时，不影响结果：每帧的识别逻辑与串行完全一致，抽样帧与合并规则不变
+
+> 提示：在核数多的服务器（如 8C16G ECS）上，`--jobs` 的收益比笔记本更大，因为云 CPU 单核较弱、多进程并行能更好吃满多核。
 
 ## 常见问题
 
