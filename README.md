@@ -131,6 +131,21 @@
 ```
 - 改完保存，运行 `run.py render 1.mp4` 重新生成视频即可生效
 
+## 手动框选台词区（最后手段）
+
+自动检测不准时（典型：说话人名嵌在对话框顶部的游戏，算法无法剔除框内人名行），可以用项目自带的框选工具手动指定台词区：
+
+1. 用浏览器打开 `tools/region_selector/selector.html`（附 4 张示例画面，也可直接把任意截图拖进页面）；
+2. 按住鼠标左键拖一个矩形，**只框住台词正文**（不要框顶部说话人名、不要漏台词），切换几个示例画面确认；
+3. 点击「复制坐标」，得到归一化坐标 `left,top,right,bottom`（0~1）；
+4. 写入该视频的 `<视频名>_output/region.json`，或直接执行：
+
+   `python run.py ocr <视频> --region left,top,right,bottom`（会自动保存 region.json）
+
+5. 重跑 `python run.py ocr <视频> --force` → `translate` → `render` 即可。
+
+> 示例画面帧存放在 `tools/region_selector/frames/`（已 gitignore，不入库）；工具本身支持拖入任意分辨率截图，坐标按原图尺寸归一化。
+
 ## 配置项速查（config.yaml）
 
 | 字段 | 作用 |

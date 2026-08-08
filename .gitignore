@@ -8,3 +8,4 @@ translations.json
 *_output/
 .claude/
 run_*.log
+tools/region_selector/frames/
