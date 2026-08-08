@@ -7,3 +7,4 @@ ocr/
 translations.json
 *_output/
 .claude/
+run_*.log
