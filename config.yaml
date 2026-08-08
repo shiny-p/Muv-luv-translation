@@ -16,15 +16,15 @@ translation:
 cfr:
   fps: 0
   crf: 18
-  preset: fast
+  preset: veryfast
   suffix: _cfr
 render:
   append_height: 160
   append_bg: auto
-  width: 0
+  width: 1280
   fps: 0
   crf: 18
-  preset: fast
+  preset: veryfast
   font: ''
   font_color: '#FFFFFF'
   stroke: 3
