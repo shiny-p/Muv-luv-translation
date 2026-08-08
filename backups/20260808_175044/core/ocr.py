@@ -4,7 +4,6 @@ import re
 
 import cv2
 import numpy as np
-from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from .config import SEGMENTS_PATH, resolve_segments_path, video_output_dir
 from .video import video_info
@@ -56,17 +55,13 @@ def _iou(box_a, box_b):
 
 
 class RapidOCRBackend:
-    def __init__(self, lang="japan", intra_threads=None):
+    def __init__(self, lang="japan"):
         try:
             from rapidocr import RapidOCR
         except ImportError:
             raise SystemExit("未安装 rapidocr，请运行: pip install rapidocr")
-        params = {"Rec.lang_type": lang}
-        if intra_threads and intra_threads > 0:
-            # 并行 OCR 时每个子进程只占 1 个推理线程，避免多进程互相争抢 CPU
-            params["EngineConfig.onnxruntime.intra_op_num_threads"] = int(intra_threads)
         try:
-            self.engine = RapidOCR(params=params)
+            self.engine = RapidOCR(params={"Rec.lang_type": lang})
         except (TypeError, ValueError):
             try:
                 self.engine = RapidOCR(params={"Global.lang": lang})
@@ -109,10 +104,10 @@ class RapidOCRBackend:
         return out
 
 
-def _make_backend(cfg, intra_threads=None):
+def _make_backend(cfg):
     engine = cfg["ocr"]["engine"]
     if engine == "rapidocr":
-        return RapidOCRBackend(cfg["ocr"].get("lang", "japan"), intra_threads=intra_threads)
+        return RapidOCRBackend(cfg["ocr"].get("lang", "japan"))
     raise SystemExit("暂不支持的 OCR 引擎: %s（目前可用 rapidocr）" % engine)
 
 
@@ -395,52 +390,13 @@ def _ocr_regions(dialogue_region, w, h):
     ]
 
 
-def default_jobs():
-    """OCR 并行进程数默认值。
-
-    <=2 核不并行（单进程多线程更快）；否则取 CPU 核数的一半（上限 8），
-    每个子进程约分到 2 个推理线程，实测吞吐最优。
-    """
-    try:
-        n = os.cpu_count() or 1
-    except Exception:
-        n = 1
-    if n <= 2:
-        return 1
-    return max(2, min(n // 2, 8))
-
-
-def _ocr_frame(backend, frame, regions, ocfg):
-    """对一帧在台词区内做 OCR，返回过滤后的检测结果列表。"""
+def _collect_detections(video, cfg, dialogue_region, w, h, start_frame, end_frame, step):
+    ocfg = cfg["ocr"]
     min_score = float(ocfg["min_score"])
     min_area = float(ocfg["min_area"])
     max_chars = int(ocfg["max_text_chars"])
     require_jp = bool(ocfg["require_japanese"])
-    keep = []
-    for kind, rx0, ry0, rx1, ry1 in regions:
-        crop = frame[ry0:ry1, rx0:rx1]
-        for d in backend.recognize(crop):
-            if d["score"] < min_score:
-                continue
-            text = d["text"]
-            if not text or len(text) > max_chars:
-                continue
-            if require_jp and not JP_RE.search(text):
-                continue
-            box = d["box"]
-            r = _box_rect(box)
-            if (r[2] - r[0]) * (r[3] - r[1]) < min_area:
-                continue
-            box[:, 0] += rx0
-            box[:, 1] += ry0
-            keep.append({"box": box, "text": text, "score": d["score"], "kind": kind})
-    return keep
-
-
-def _ocr_scan_range(video, cfg, dialogue_region, w, h, start_frame, end_frame, step, sample_set, intra_threads=None):
-    """顺序扫描 [start_frame, end_frame]，仅对 sample_set 中的帧做 OCR。"""
-    ocfg = cfg["ocr"]
-    backend = _make_backend(cfg, intra_threads=intra_threads)
+    backend = _make_backend(cfg)
     regions = _ocr_regions(dialogue_region, w, h)
 
     detections = {}
@@ -453,8 +409,25 @@ def _ocr_scan_range(video, cfg, dialogue_region, w, h, start_frame, end_frame, s
         ok, frame = cap.read()
         if not ok:
             break
-        if idx in sample_set:
-            keep = _ocr_frame(backend, frame, regions, ocfg)
+        if (idx - start_frame) % step == 0:
+            keep = []
+            for kind, rx0, ry0, rx1, ry1 in regions:
+                crop = frame[ry0:ry1, rx0:rx1]
+                for d in backend.recognize(crop):
+                    if d["score"] < min_score:
+                        continue
+                    text = d["text"]
+                    if not text or len(text) > max_chars:
+                        continue
+                    if require_jp and not JP_RE.search(text):
+                        continue
+                    box = d["box"]
+                    r = _box_rect(box)
+                    if (r[2] - r[0]) * (r[3] - r[1]) < min_area:
+                        continue
+                    box[:, 0] += rx0
+                    box[:, 1] += ry0
+                    keep.append({"box": box, "text": text, "score": d["score"], "kind": kind})
             if keep:
                 detections[idx] = keep
         idx += 1
@@ -462,64 +435,7 @@ def _ocr_scan_range(video, cfg, dialogue_region, w, h, start_frame, end_frame, s
     return detections
 
 
-def _split_ocr_chunks(sample_indices, jobs):
-    """把采样帧索引按位置均分为 jobs 个连续子段。"""
-    if jobs <= 1 or len(sample_indices) <= 1:
-        return [sample_indices]
-    n = max(1, min(jobs, len(sample_indices)))
-    size, rem = divmod(len(sample_indices), n)
-    chunks, pos = [], 0
-    for i in range(n):
-        k = size + (1 if i < rem else 0)
-        chunks.append(sample_indices[pos:pos + k])
-        pos += k
-    return chunks
-
-
-def _ocr_worker(payload):
-    """子进程工作函数：扫描自己负责的帧段并做 OCR（每个子进程 1 个推理线程）。"""
-    video, cfg, dialogue_region, w, h, sample_indices, step, intra_threads = payload
-    if not sample_indices:
-        return {}
-    lo, hi = sample_indices[0], sample_indices[-1]
-    return _ocr_scan_range(
-        video, cfg, dialogue_region, w, h, lo, hi, step,
-        set(sample_indices), intra_threads=intra_threads,
-    )
-
-
-def _collect_detections(video, cfg, dialogue_region, w, h, start_frame, end_frame, step, jobs=None):
-    """抽帧 OCR。jobs>1 时用多进程并行，每个子进程只处理自己负责的帧段。"""
-    jobs = default_jobs() if jobs is None else max(1, int(jobs))
-    sample_indices = list(range(start_frame, end_frame + 1, step))
-    if jobs <= 1 or len(sample_indices) <= 1:
-        return _ocr_scan_range(
-            video, cfg, dialogue_region, w, h,
-            start_frame, end_frame, step, set(sample_indices),
-        )
-
-    chunks = _split_ocr_chunks(sample_indices, jobs)
-    try:
-        cpu_n = os.cpu_count() or 1
-    except Exception:
-        cpu_n = 1
-    intra = max(1, cpu_n // jobs)  # 每个子进程分到的推理线程数
-    payloads = [
-        (video, cfg, dialogue_region, w, h, chunk, step, intra)
-        for chunk in chunks if chunk
-    ]
-    detections = {}
-    try:
-        with ProcessPoolExecutor(max_workers=len(payloads)) as ex:
-            futures = [ex.submit(_ocr_worker, p) for p in payloads]
-            for fut in as_completed(futures):
-                detections.update(fut.result())
-    except Exception as exc:
-        raise SystemExit("OCR 并行处理失败（可用 --jobs 1 顺序执行）: %s" % exc)
-    return detections
-
-
-def run_ocr(video, cfg, dialogue_region, force=False, jobs=None):
+def run_ocr(video, cfg, dialogue_region, force=False):
     seg_path = resolve_segments_path(video)
     if os.path.exists(seg_path) and not force:
         print("OCR 结果已存在，跳过（加 --force 强制重跑）")
@@ -527,9 +443,7 @@ def run_ocr(video, cfg, dialogue_region, force=False, jobs=None):
 
     w, h, fps, n = video_info(video)
     step = max(1, int(cfg["ocr"]["sample_step"]))
-    jobs = default_jobs() if jobs is None else max(1, int(jobs))
-    print("OCR 并行进程数: %d（--jobs 可调整）" % jobs)
-    detections = _collect_detections(video, cfg, dialogue_region, w, h, 0, max(0, n - 1), step, jobs=jobs)
+    detections = _collect_detections(video, cfg, dialogue_region, w, h, 0, max(0, n - 1), step)
 
     segments = _build_segments(detections, step)
     save_segments(video, segments, fps)
@@ -548,7 +462,6 @@ def run_ocr_range(
     start_seconds=None,
     end_seconds=None,
     padding_seconds=1.0,
-    jobs=None,
 ):
     """重识别一个已有字幕片段或指定时间段，并回写 segments.json。
 
@@ -590,7 +503,7 @@ def run_ocr_range(
     scan_end = min(max(0, n - 1), target_end + padding_frames)
     step = max(1, int(cfg["ocr"]["sample_step"]))
 
-    detections = _collect_detections(video, cfg, dialogue_region, w, h, scan_start, scan_end, step, jobs=jobs)
+    detections = _collect_detections(video, cfg, dialogue_region, w, h, scan_start, scan_end, step)
     rescanned = _build_segments(detections, step)
     # 扩展范围只用于提供逐字显示的上下文；回写时只替换目标区间，避免影响邻句。
     replacements = [

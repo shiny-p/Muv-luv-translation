@@ -1,0 +1,34 @@
+output: output.mp4
+ocr:
+  engine: rapidocr
+  lang: japan
+  sample_step: 48
+  min_score: 0.5
+  min_area: 200
+  max_text_chars: 80
+  require_japanese: true
+translation:
+  provider: deepseek
+  base_url: https://api.deepseek.com
+  api_key: ''
+  api_key_env: DEEPSEEK_API_KEY
+  model: deepseek-v4-flash
+cfr:
+  fps: 0
+  crf: 18
+  preset: fast
+  suffix: _cfr
+render:
+  append_height: 160
+  append_bg: auto
+  width: 0
+  fps: 0
+  crf: 18
+  preset: fast
+  font: ''
+  font_color: '#FFFFFF'
+  stroke: 3
+  stroke_color: '#000000'
+  frame_margin: 0.03
+  font_scale: 0.78
+  test_frames: 0

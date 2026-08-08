@@ -56,7 +56,6 @@ def main():
     p.add_argument("--force", action="store_true")
     p.add_argument("--redetect-region", action="store_true", help="忽略已有 region.json，重新检测台词区")
     p.add_argument("--region", help="手工指定并保存台词区：left,top,right,bottom（相对坐标）")
-    p.add_argument("--jobs", type=int, default=None, help="OCR 并行进程数（默认=CPU核数，上限8；1=顺序）")
     p = sub.add_parser("ocr-range", help="局部重做 OCR（需已有 segments.json）")
     p.add_argument("video", help="视频文件路径")
     target = p.add_mutually_exclusive_group(required=True)
@@ -66,7 +65,6 @@ def main():
     p.add_argument("--padding", type=float, default=1.0, help="目标前后额外扫描秒数（默认 1）")
     p.add_argument("--redetect-region", action="store_true", help="忽略已有 region.json，重新检测台词区")
     p.add_argument("--region", help="手工指定并保存台词区：left,top,right,bottom（相对坐标）")
-    p.add_argument("--jobs", type=int, default=None, help="OCR 并行进程数（默认=CPU核数，上限8；1=顺序）")
     p = sub.add_parser("translate", help="第2步：翻译为简体中文（可带视频名定位输出文件夹）")
     p.add_argument("video", nargs="?", help="视频文件路径（可选）")
     p.add_argument("--force", action="store_true")
@@ -78,7 +76,6 @@ def main():
     p.add_argument("--force", action="store_true")
     p.add_argument("--redetect-region", action="store_true", help="忽略已有 region.json，重新检测台词区")
     p.add_argument("--region", help="手工指定并保存台词区：left,top,right,bottom（相对坐标）")
-    p.add_argument("--jobs", type=int, default=None, help="OCR 并行进程数（默认=CPU核数，上限8；1=顺序）")
 
     args = ap.parse_args()
     if not args.cmd:
@@ -103,7 +100,7 @@ def main():
     elif args.cmd == "ocr":
         video = _video(getattr(args, "video", None))
         region = _get_region(video, cfg, args.redetect_region, args.region)
-        run_ocr(video, cfg, region, force=args.force, jobs=getattr(args, "jobs", None))
+        run_ocr(video, cfg, region, force=args.force)
     elif args.cmd == "ocr-range":
         if args.start is not None and args.end is None:
             raise SystemExit("使用 --start 时必须同时指定 --end")
@@ -119,7 +116,6 @@ def main():
             start_seconds=args.start,
             end_seconds=args.end,
             padding_seconds=args.padding,
-            jobs=getattr(args, "jobs", None),
         )
     elif args.cmd == "translate":
         video = getattr(args, "video", None)
@@ -131,7 +127,7 @@ def main():
         video = _video(getattr(args, "video", None))
         video = run_cfr(cfg, video, force=args.force)  # 第0步：转 CFR，返回 CFR 视频路径
         region = _get_region(video, cfg, args.redetect_region, args.region)
-        run_ocr(video, cfg, region, force=args.force, jobs=getattr(args, "jobs", None))
+        run_ocr(video, cfg, region, force=args.force)
         run_translate(cfg, force=args.force, video=video)
         run_render(cfg, force=args.force, video=video)
 

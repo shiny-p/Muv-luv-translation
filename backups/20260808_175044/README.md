@@ -148,18 +148,6 @@
 | `render.font_scale` | 全局字号 = 字幕框高度中位数 × 此系数 |
 | `render.test_frames` | 调试用：只渲染前 N 帧（0=全部） |
 
-## 加速选项（--jobs）
-
-OCR 是整条流水线中最耗时的一步，默认单进程串行抽帧识别。现在支持多进程并行：
-
-- `python run.py ocr 1.mp4 --jobs 4`：用 4 个进程并行 OCR（每个进程约 2 个推理线程）
-- `python run.py all 1.mp4 --jobs 4`：整条流水线同样生效
-- `python run.py ocr-range 1.mp4 --segment 12 --jobs 4`：局部重识别同样生效
-- 不传 `--jobs` 时自动按 CPU 核数选择：≤2 核不并行；否则取核数一半（上限 8）。多核机器上可自行调大（如 `--jobs 8`）
-- 并行只影响耗时，不影响结果：每帧的识别逻辑与串行完全一致，抽样帧与合并规则不变
-
-> 提示：在核数多的服务器（如 8C16G ECS）上，`--jobs` 的收益比笔记本更大，因为云 CPU 单核较弱、多进程并行能更好吃满多核。
-
 ## 常见问题
 
 - **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`
