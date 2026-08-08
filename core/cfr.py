@@ -83,10 +83,22 @@ def run_cfr(cfg, video, force=False):
             if not line:
                 break
             line = line.strip()
-            if line.startswith("out_time_ms="):
+            if line.startswith("out_time_us="):
+                try:
+                    us = int(line.split("=", 1)[1])
+                    cur = int(us / 1_000_000 * fps)
+                    pbar.n = min(total, cur)
+                    pbar.refresh()
+                except ValueError:
+                    pass
+            elif line.startswith("out_time_ms="):
                 try:
                     ms = int(line.split("=", 1)[1])
-                    cur = int(ms / 1000 * fps)
+                    # 部分 ffmpeg 构建把 out_time_ms 实际输出为微秒
+                    if ms > 1_000_000:
+                        cur = int(ms / 1_000_000 * fps)
+                    else:
+                        cur = int(ms / 1000 * fps)
                     pbar.n = min(total, cur)
                     pbar.refresh()
                 except ValueError:
