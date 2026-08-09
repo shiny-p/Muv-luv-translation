@@ -53,6 +53,7 @@ translation:                   # ---- 文本翻译 ----
 video:                         # ---- 视频编码（CFR 与渲染共用）----
   encoder: x264                # x264=CPU 编码（内置 ffmpeg）；nvenc=GPU 编码（需系统 ffmpeg 含 h264_nvenc）
   ffmpeg: ""                   # 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置，nvenc 用系统 PATH 里的 ffmpeg）
+  hwaccel: ""                  # 解码硬加速：""=CPU 解码；cuda=用 NVDEC/CUDA 硬解（需 NVIDIA 显卡 + 系统 ffmpeg）
 
 cfr:                           # ---- 第0步：恒定帧率(CFR)转换 ----
   fps: 0                       # 目标帧率，0=自动（取 render.fps，否则源视频帧率四舍五入）
@@ -92,6 +93,7 @@ DEFAULTS = {
     "video": {
         "encoder": "x264",
         "ffmpeg": "",
+        "hwaccel": "",
     },
     "translation": {
         "provider": "deepseek",

@@ -8,6 +8,11 @@ import sys
 
 import cv2
 import numpy as np
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
 from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 
@@ -18,7 +23,7 @@ from .config import (
     resolve_translations_path,
     video_output_dir,
 )
-from .video import video_info, write_cmd
+from .video import video_info, write_cmd, decode_frames_cmd
 
 FONT_CANDIDATES = [
     "/System/Library/Fonts/PingFang.ttc",
@@ -36,6 +41,59 @@ def _load_segments(path):
 def _load_translations(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f) or {}
+
+
+class _PipeReader:
+    """ffmpeg NVDEC/CUDA 硬解读取器：stdout 输出 BGR 帧（可按 out_w/out_h 预先缩放）。"""
+
+    def __init__(self, video, out_w, out_h, cfg):
+        self.w, self.h = out_w, out_h
+        self.scaled = True
+        self.proc = subprocess.Popen(
+            decode_frames_cmd(video, cfg, out_w=out_w, out_h=out_h),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        _enlarge_pipe(self.proc.stdout)
+
+    def read(self):
+        need = self.w * self.h * 3
+        data = self.proc.stdout.read(need)
+        if len(data) < need:
+            return False, None
+        return True, np.frombuffer(data, np.uint8).reshape(self.h, self.w, 3)
+
+    def release(self):
+        try:
+            self.proc.stdout.close()
+        except Exception:
+            pass
+        try:
+            self.proc.terminate()
+            self.proc.wait(timeout=5)
+        except Exception:
+            pass
+
+
+class _CvReader:
+    """OpenCV 软解读取器（无 hwaccel 时使用）。"""
+
+    def __init__(self, video):
+        self.cap = cv2.VideoCapture(video)
+        self.scaled = False
+
+    def read(self):
+        return self.cap.read()
+
+    def release(self):
+        self.cap.release()
+
+
+def _open_reader(video, out_w, out_h, cfg):
+    """按配置选择解码器：hwaccel=cuda 用 ffmpeg 硬解（可预缩放），否则 OpenCV 软解。"""
+    if decode_frames_cmd(video, cfg, out_w=out_w, out_h=out_h) is not None:
+        return _PipeReader(video, out_w, out_h, cfg)
+    return _CvReader(video)
 
 
 def find_font(name):
@@ -186,6 +244,55 @@ def _resolve_strip_color(frame, cfg, h, w):
     return _strip_color_from_frame(frame, h, w)
 
 
+_FONT_CACHE = {}
+_LAYOUT_CACHE = {}
+_TEXT_STRIP_CACHE = {}
+
+
+def _enlarge_pipe(stream, size=8 * 1024 * 1024):
+    """放大管道缓冲区：默认 64KB 管道会让大帧读写反复阻塞，是渲染吞吐的瓶颈。"""
+    if fcntl is None:
+        return
+    try:
+        fd = stream.fileno()
+        fcntl.fcntl(fd, fcntl.F_SETPIPE_SZ, size)
+    except (OSError, ValueError, AttributeError):
+        pass
+
+
+
+
+def _get_font(path, size):
+    """带缓存的字体加载：避免每帧重复解析 CJK 字体文件（曾是最主要的渲染开销）。"""
+    key = (path, size)
+    f = _FONT_CACHE.get(key)
+    if f is None:
+        f = ImageFont.truetype(path, size)
+        if len(_FONT_CACHE) > 64:
+            _FONT_CACHE.clear()
+        _FONT_CACHE[key] = f
+    return f
+
+
+def _layout_text(dtext, font_path, max_w, sw, font_size):
+    """带缓存的文本排版：同一句台词在多帧间只排一次版。返回 (字号, 行列表)。"""
+    key = (dtext, max_w, font_size)
+    hit = _LAYOUT_CACHE.get(key)
+    if hit is not None:
+        return hit
+    size = font_size
+    f = _get_font(font_path, size)
+    lines = _wrap_text(dtext, f, max_w - 2 * sw)
+    while len(lines) > 3 and size > 14:
+        size -= 2
+        f = _get_font(font_path, size)
+        lines = _wrap_text(dtext, f, max_w - 2 * sw)
+    if len(_LAYOUT_CACHE) > 512:
+        _LAYOUT_CACHE.clear()
+    _LAYOUT_CACHE[key] = (size, lines)
+    return size, lines
+
+
 def _render_frame_append(frame, idx, segments, translations, cfg, font_path, font_size,
                          out_w, h_src, append_h):
     active = [s for s in segments if s["start"] <= idx <= s["end"]]
@@ -216,42 +323,42 @@ def _render_frame_append(frame, idx, segments, translations, cfg, font_path, fon
             parts.append(t)
     dtext = "\n".join(parts)
 
+    base_color = _resolve_strip_color(frame, cfg, h_src, out_w)
+    color_key = tuple((base_color // 16).tolist())
+    cache_key = (dtext, font_size, color_key)
+    cached = _TEXT_STRIP_CACHE.get(cache_key)
+    if cached is not None:
+        return np.vstack([frame, cached])
     strip = np.zeros((append_h, out_w, 3), np.uint8)
-    strip[:] = _resolve_strip_color(frame, cfg, h_src, out_w)
-    out = np.vstack([frame, strip])
-    if not dtext:
-        return out
-
-    rcfg = cfg["render"]
-    sw = int(rcfg["stroke"])
-    color = rcfg["font_color"]
-    sc = rcfg["stroke_color"]
-    img = Image.fromarray(cv2.cvtColor(out, cv2.COLOR_BGR2RGB))
-    d = ImageDraw.Draw(img)
-    margin = float(rcfg.get("frame_margin", 0.03))
-    max_w = int(out_w * (1 - 2 * margin))
-    pad = max(10, int(append_h * 0.06))
-
-    top = h_src + pad
-    size = font_size
-    f = ImageFont.truetype(font_path, size)
-    lines = _wrap_text(dtext, f, max_w - 2 * sw)
-    while len(lines) > 3 and size > 14:
-        size -= 2
-        f = ImageFont.truetype(font_path, size)
-        lines = _wrap_text(dtext, f, max_w - 2 * sw)
-    lh = _line_height(f)
-    gap = size // 3
-    total = lh * len(lines) + gap * (len(lines) - 1)
-    bottom = h_src + append_h - pad
-    cy = top + max(0, (bottom - top) - total) / 2 + lh / 2
-    for line in lines:
-        d.text((out_w / 2, cy), line, font=f, fill=color, anchor="mm",
-               stroke_width=sw, stroke_fill=sc)
-        cy += lh + gap
-
-    out[:, :] = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
-    return out
+    strip[:] = base_color
+    if dtext:
+        rcfg = cfg["render"]
+        sw = int(rcfg["stroke"])
+        color = rcfg["font_color"]
+        sc = rcfg["stroke_color"]
+        margin = float(rcfg.get("frame_margin", 0.03))
+        max_w = int(out_w * (1 - 2 * margin))
+        pad = max(10, int(append_h * 0.06))
+        size, lines = _layout_text(dtext, font_path, max_w, sw, font_size)
+        f = _get_font(font_path, size)
+        lh = _line_height(f)
+        gap = size // 3
+        total = lh * len(lines) + gap * (len(lines) - 1)
+        top = pad
+        bottom = append_h - pad
+        cy = top + max(0, (bottom - top) - total) / 2 + lh / 2
+        # 只在条带区域绘制文字，避免整帧 PIL 转换
+        img = Image.fromarray(cv2.cvtColor(strip, cv2.COLOR_BGR2RGB))
+        d = ImageDraw.Draw(img)
+        for line in lines:
+            d.text((out_w / 2, cy), line, font=f, fill=color, anchor="mm",
+                   stroke_width=sw, stroke_fill=sc)
+            cy += lh + gap
+        strip[:, :] = cv2.cvtColor(np.asarray(img), cv2.COLOR_RGB2BGR)
+        if len(_TEXT_STRIP_CACHE) > 512:
+            _TEXT_STRIP_CACHE.clear()
+        _TEXT_STRIP_CACHE[cache_key] = strip.copy()
+    return np.vstack([frame, strip])
 
 
 def _resolve_video(video):
@@ -328,8 +435,9 @@ def run_render(cfg, force=False, video=None):
     proc = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE
     )
+    _enlarge_pipe(proc.stdin)
 
-    cap = cv2.VideoCapture(video)
+    reader = _open_reader(video, out_w, int(round(h * sf)), cfg)
     next_out = 0
     src_i = 0
     pbar = tqdm(total=n_out, desc="渲染中")
@@ -337,10 +445,10 @@ def run_render(cfg, force=False, video=None):
         while True:
             if next_out >= n_out:
                 break
-            ok, frame = cap.read()
+            ok, frame = reader.read()
             if not ok:
                 break
-            if sf != 1.0:
+            if sf != 1.0 and not getattr(reader, "scaled", False):
                 frame = cv2.resize(frame, (out_w, int(round(h * sf))), interpolation=cv2.INTER_AREA)
             frame = _render_frame_append(
                 frame, src_i, segs, translations, cfg, font_path, font_size,
@@ -364,7 +472,7 @@ def run_render(cfg, force=False, video=None):
         pbar.close()
         raise SystemExit("ffmpeg 编码失败：%s" % err)
     finally:
-        cap.release()
+        reader.release()
         try:
             proc.stdin.close()
         except Exception:

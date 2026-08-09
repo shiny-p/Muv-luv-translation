@@ -17,6 +17,7 @@ translation:
 video:
   encoder: x264
   ffmpeg: ''
+  hwaccel: ''
 cfr:
   fps: 0
   crf: 18

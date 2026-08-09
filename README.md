@@ -31,6 +31,8 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 # 一键全流程（自动转 CFR → 检测台词区 → OCR → 翻译 → 渲染，输出在 1_output/）
 .venv/bin/python run.py all 1.mp4
 
+> ⚠️ **处理规则（必须遵守）**：除非用户明确命令使用 `all`，否则**禁止一键全流程**。必须依照「核心流程」逐步执行：`cfr` → `regions`（展示 4 张校验截图）→ `ocr`（完成后全文检查 `segments.json`）→ `translate`（完成后抽检 `translations.json`）→ `render`。**每个检查点通过后才可进入下一步**，避免翻译/识别出错后重新渲染。
+
 # 或分步执行
 .venv/bin/python run.py cfr 1.mp4            # ① 转恒定帧率(CFR)，原始视频与 CFR 视频一并放入 1_output/
 .venv/bin/python run.py regions 1.mp4        # ② 检测台词区 + 生成校验截图 + 写入 region.json
@@ -79,6 +81,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | `cfr.fps` | CFR 目标帧率，0=自动（先取 `render.fps`，否则源视频帧率四舍五入） |
 | `video.encoder` | 视频编码（CFR/渲染共用）：`x264`（CPU，内置 ffmpeg）/ `nvenc`（GPU，需系统 ffmpeg 含 h264_nvenc） |
 | `video.ffmpeg` | 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置，nvenc 用系统 PATH 里的 ffmpeg） |
+| `video.hwaccel` | 解码硬加速：`""`=CPU 解码；`cuda`=用 NVDEC/CUDA 硬解源帧（需 NVIDIA 显卡 + 系统 ffmpeg，渲染/CFR 显著提速） |
 | `cfr.crf` / `cfr.preset` | CFR 转换质量/速度（crf 默认 18；preset 默认 fast，仓库 config.yaml 已改为 veryfast 提速） |
 | `cfr.suffix` | CFR 文件名后缀（默认 `_cfr`，即 `<视频名>_cfr.mp4`） |
 | `translation.provider` | `deepseek` / `openai` / `qwen` / `mock`（mock 免 key，用于流程验证） |
@@ -178,8 +181,8 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 需要 NVIDIA 显卡与驱动：
 
 1. 安装 GPU 依赖：`pip install onnxruntime-gpu`（会替换 CPU 版 onnxruntime），并安装含 `h264_nvenc` 的系统 ffmpeg（如 Ubuntu `apt install ffmpeg`，用 `ffmpeg -encoders | grep nvenc` 验证）；
-2. `config.yaml` 设置 `ocr.use_gpu: true`、`video.encoder: nvenc`（`video.ffmpeg` 留空会自动使用系统 ffmpeg）；
-3. OCR 建议 `--jobs 1~2`（每个进程占用独立 CUDA 显存，过大可能爆显存）；渲染/CFR 用 NVENC，速度数倍于 x264。
+2. `config.yaml` 设置 `ocr.use_gpu: true`、`video.encoder: nvenc`、`video.hwaccel: cuda`（`video.ffmpeg` 留空会自动使用系统 ffmpeg）；
+3. OCR 建议 `--jobs 1~2`（每个进程占用独立 CUDA 显存，过大可能爆显存）；渲染/CFR 用 NVENC 编码 + NVDEC 硬解，速度数倍于 CPU 编解码。
 
 > GPU 只影响速度，不影响结果；没有 NVIDIA 显卡时保持默认 `use_gpu: false`、`encoder: x264` 即可。
 

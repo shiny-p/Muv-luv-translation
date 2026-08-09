@@ -11,7 +11,7 @@ import subprocess
 from tqdm import tqdm
 
 from .config import video_output_dir
-from .video import video_info, get_ffmpeg, encoder_args
+from .video import video_info, get_ffmpeg, encoder_args, hwaccel_decode_args
 
 
 def _target_fps(cfg, src_fps):
@@ -58,6 +58,7 @@ def run_cfr(cfg, video, force=False):
     exe = get_ffmpeg(cfg)
     cmd = [
         exe, "-hide_banner", "-loglevel", "error", "-y",
+        *hwaccel_decode_args(cfg),
         "-i", video,
         "-vf", "fps=%s,setpts=N/(%s*TB)" % (fps, fps),
         "-af", "aresample=async=1",

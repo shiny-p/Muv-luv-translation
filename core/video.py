@@ -75,3 +75,41 @@ def write_cmd(video_path, width, height, fps, out, crf, preset, cfg=None):
         "-shortest",
         out,
     ]
+
+
+def get_hwaccel(cfg=None):
+    """返回硬解方式：'cuda'（NVDEC/CUDA）或 ''（CPU 解码）。"""
+    cfg = cfg or {}
+    hw = (cfg.get("video") or {}).get("hwaccel") or ""
+    return "cuda" if hw == "cuda" else ""
+
+
+def hwaccel_decode_args(cfg=None):
+    """返回放在 ffmpeg `-i` 之前的硬解参数（cuda/NVDEC），未启用时为空列表。"""
+    if get_hwaccel(cfg) == "cuda":
+        return ["-hwaccel", "cuda", "-hwaccel_output_format", "nv12"]
+    return []
+
+
+def decode_frames_cmd(video, cfg=None, out_w=None, out_h=None):
+    """硬解渲染用：ffmpeg 解码全部帧并以 BGR 输出到 stdout。
+
+    - 未启用 hwaccel 时返回 None（调用方回退到 OpenCV 解码）。
+    - 指定 out_w/out_h 时在 ffmpeg 内先 scale 到目标尺寸再输出，
+      大幅减少管道数据量与 Python 侧开销（渲染的主要瓶颈）。
+    """
+    if get_hwaccel(cfg) != "cuda":
+        return None
+    cmd = [
+        get_ffmpeg(cfg),
+        "-hide_banner",
+        "-loglevel", "error",
+        "-hwaccel", "cuda",
+        "-hwaccel_output_format", "nv12",
+        "-i", video,
+        "-an",
+    ]
+    if out_w and out_h:
+        cmd += ["-vf", "scale=%d:%d" % (int(out_w), int(out_h))]
+    cmd += ["-f", "rawvideo", "-pix_fmt", "bgr24", "pipe:1"]
+    return cmd
