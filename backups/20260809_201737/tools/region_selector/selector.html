@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>台词区框选工具</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; background:#1e1e1e; color:#eee; margin:0; padding:16px; }
+  h1 { font-size:18px; margin:0 0 8px; }
+  .tip { font-size:13px; color:#aaa; margin-bottom:10px; }
+  .tabs { margin-bottom:8px; }
+  .tabs button { background:#333; color:#eee; border:1px solid #555; padding:6px 14px; margin-right:6px; border-radius:4px; cursor:pointer; }
+  .tabs button.active { background:#0a6; border-color:#0a6; }
+  #drop { border:2px dashed #555; border-radius:8px; padding:14px; text-align:center; color:#999; margin-bottom:10px; font-size:13px; }
+  #drop.over { border-color:#0a6; color:#0a6; }
+  canvas { border:1px solid #555; background:#000; max-width:100%; cursor:crosshair; touch-action:none; }
+  .out { display:flex; gap:24px; margin-top:12px; flex-wrap:wrap; }
+  .box { background:#2a2a2a; border:1px solid #444; border-radius:6px; padding:12px 16px; }
+  .box .label { font-size:12px; color:#999; margin-bottom:6px; }
+  .big { font-family: Menlo, Consolas, monospace; font-size:20px; }
+  .norm { color:#6f6; }
+  .pix { color:#fc6; }
+  button.copy { background:#0a6; color:#fff; border:none; padding:8px 16px; border-radius:4px; cursor:pointer; font-size:14px; margin-top:8px; }
+  .hint { font-size:12px; color:#888; margin-top:10px; }
+</style>
+</head>
+<body>
+  <h1>台词区框选工具</h1>
+  <div class="tip">在图上按住鼠标左键拖一个矩形，框住「台词正文」（不要框顶部说话人名，也不要漏掉台词）。可切换示例画面，或直接把任意截图拖进页面。</div>
+  <div id="drop">将任意截图（PNG/JPG）拖到这里，或点击下方示例画面</div>
+  <div class="tabs" id="tabs"></div>
+  <canvas id="cv"></canvas>
+  <div class="out">
+    <div class="box"><div class="label">归一化坐标（0~1，写入 region.json）</div><div class="big norm" id="norm">--</div></div>
+    <div class="box"><div class="label">像素坐标（按当前原图分辨率）</div><div class="big pix" id="pix">--</div></div>
+    <div class="box"><div class="label">命令行参数</div><div class="big" id="cli">--</div><button class="copy" onclick="copyAll()">复制坐标</button></div>
+  </div>
+  <div class="hint">用法：把归一化坐标发给 AI / 写入 &lt;视频名&gt;_output/region.json，或直接 `python run.py ocr &lt;视频&gt; --region left,top,right,bottom`（会自动保存）。</div>
+<script>
+const samples = [
+  { name: "t=20s", file: "frames/frame_20s.png" },
+  { name: "t=60s", file: "frames/frame_60s.png" },
+  { name: "t=150s", file: "frames/frame_150s.png" },
+  { name: "t=300s", file: "frames/frame_300s.png" },
+  { name: "t=500s", file: "frames/frame_500s.png" },
+  { name: "t=700s", file: "frames/frame_700s.png" },
+];
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const tabsEl = document.getElementById("tabs");
+const drop = document.getElementById("drop");
+let img = new Image();
+let natW = 2520, natH = 1080;   // 当前原图分辨率
+let dispW = 1260, dispH = 540;  // 画布显示分辨率
+let rect = null, dragging = false, sx = 0, sy = 0;
+
+function loadImage(url, name) {
+  const im = new Image();
+  im.onload = () => { img = im; natW = im.naturalWidth; natH = im.naturalHeight; fitCanvas(); rect = null; draw(); };
+  im.onerror = () => {};
+  im.src = url;
+}
+function fitCanvas() {
+  dispW = Math.min(1260, natW);
+  dispH = Math.round(dispW * natH / natW);
+  cv.width = dispW; cv.height = dispH;
+}
+function draw() {
+  ctx.clearRect(0, 0, dispW, dispH);
+  if (img.complete && img.naturalWidth) ctx.drawImage(img, 0, 0, dispW, dispH);
+  if (rect) {
+    const x = Math.min(rect.x0, rect.x1), y = Math.min(rect.y0, rect.y1);
+    const w = Math.abs(rect.x1 - rect.x0), h = Math.abs(rect.y1 - rect.y0);
+    ctx.fillStyle = "rgba(0,255,0,0.15)"; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = "#0f0"; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+  }
+  updateOut();
+}
+function updateOut() {
+  const nEl = document.getElementById("norm"), pEl = document.getElementById("pix"), cEl = document.getElementById("cli");
+  if (!rect) { nEl.textContent = "--"; pEl.textContent = "--"; cEl.textContent = "--"; return; }
+  const x0 = Math.min(rect.x0, rect.x1), y0 = Math.min(rect.y0, rect.y1);
+  const x1 = Math.max(rect.x0, rect.x1), y1 = Math.max(rect.y0, rect.y1);
+  const l = (x0 / dispW).toFixed(3), t = (y0 / dispH).toFixed(3), r = (x1 / dispW).toFixed(3), b = (y1 / dispH).toFixed(3);
+  const px0 = Math.round(x0 / dispW * natW), py0 = Math.round(y0 / dispH * natH);
+  const px1 = Math.round(x1 / dispW * natW), py1 = Math.round(y1 / dispH * natH);
+  nEl.textContent = `left=${l}  top=${t}  right=${r}  bottom=${b}`;
+  pEl.textContent = `${px0},${py0} → ${px1},${py1}  (原图 ${natW}×${natH})`;
+  cEl.textContent = `--region ${l},${t},${r},${b}`;
+  return { l, t, r, b, px: `${px0},${py0} → ${px1},${py1}` };
+}
+function copyAll() {
+  const d = updateOut();
+  if (!d) return;
+  const s = `归一化: left=${d.l} top=${d.t} right=${d.r} bottom=${d.b}\n像素: ${d.px}\n命令行: --region ${d.l},${d.t},${d.r},${d.b}`;
+  navigator.clipboard.writeText(s).then(() => alert("已复制！"), () => prompt("手动复制：", s));
+}
+// 示例画面（存在才显示）
+let shown = 0;
+samples.forEach((s, i) => {
+  const b = document.createElement("button");
+  b.textContent = s.name;
+  b.onclick = () => { [...tabsEl.children].forEach(x => x.classList.remove("active")); b.classList.add("active"); loadImage(s.file, s.name); };
+  tabsEl.appendChild(b);
+  const test = new Image();
+  test.onload = () => { shown++; if (shown === 1) b.click(); };
+  test.onerror = () => b.remove();
+  test.src = s.file;
+});
+// 拖入任意图片
+drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+drop.addEventListener("drop", e => {
+  e.preventDefault(); drop.classList.remove("over");
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) loadImage(URL.createObjectURL(f), f.name);
+});
+// 鼠标框选
+cv.addEventListener("mousedown", e => {
+  const r = cv.getBoundingClientRect();
+  sx = (e.clientX - r.left) * (dispW / r.width);
+  sy = (e.clientY - r.top) * (dispH / r.height);
+  rect = { x0: sx, y0: sy, x1: sx, y1: sy }; dragging = true; draw();
+});
+cv.addEventListener("mousemove", e => {
+  if (!dragging) return;
+  const r = cv.getBoundingClientRect();
+  rect.x1 = (e.clientX - r.left) * (dispW / r.width);
+  rect.y1 = (e.clientY - r.top) * (dispH / r.height);
+  draw();
+});
+window.addEventListener("mouseup", () => { dragging = false; });
+</script>
+</body>
+</html>

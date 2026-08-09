@@ -75,10 +75,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 |---|---|
 | `<视频名>_output/region.json` | 台词区（相对坐标 0~1）；首次自动检测写入，不准可手改，不影响其他视频 |
 | `ocr.sample_step` | 每多少帧抽 1 帧识别（默认 48 ≈ 60fps 下 800ms 一次；**不要低于 24**，过密会捕捉逐字渲染中途的不稳定框） |
-| `ocr.use_gpu` | 用 onnxruntime-gpu(CUDA) 跑 OCR（需 NVIDIA 显卡；安装 `pip install onnxruntime-gpu`） |
 | `cfr.fps` | CFR 目标帧率，0=自动（先取 `render.fps`，否则源视频帧率四舍五入） |
-| `video.encoder` | 视频编码（CFR/渲染共用）：`x264`（CPU，内置 ffmpeg）/ `nvenc`（GPU，需系统 ffmpeg 含 h264_nvenc） |
-| `video.ffmpeg` | 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置，nvenc 用系统 PATH 里的 ffmpeg） |
 | `cfr.crf` / `cfr.preset` | CFR 转换质量/速度（crf 默认 18；preset 默认 fast，仓库 config.yaml 已改为 veryfast 提速） |
 | `cfr.suffix` | CFR 文件名后缀（默认 `_cfr`，即 `<视频名>_cfr.mp4`） |
 | `translation.provider` | `deepseek` / `openai` / `qwen` / `mock`（mock 免 key，用于流程验证） |
@@ -132,8 +129,6 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 
 `<视频名>_output/region_check_*.png` 是检测出的台词区校验截图（绿框），**首次处理或重新检测区域后必须打开检查**：绿框应只框住台词区——既不能漏掉台词，也不能框入顶部人名标签、右上角计时器等杂字。识别是否干净直接决定后续 OCR 与翻译质量。
 
-**执行规则（处理方必须遵守）**：区域检测完成后，必须把 4 张 `region_check_*.png` **在本对话中展示出来**（以图片形式贴出），或调用系统「预览」打开这些图片；展示后**直接继续 OCR 等后续流程，无需等待人工确认**——除非人工主动指出区域不准并中止，否则按流程执行；若人工指出不准，按下面方法修正区域后重跑 `ocr --force`。
-
 若不准，编辑该视频输出目录的 `region.json`，或用 `--region left,top,right,bottom` 保存手工区域后重跑 `ocr --force`；区域文件不会影响其他视频。
 
 ### 台词区的保存与手工调整
@@ -172,16 +167,6 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 - 并行只影响耗时，不影响结果：每帧的识别逻辑与串行完全一致，抽样帧与合并规则不变
 
 > 提示：在核数多的服务器（如 8C16G ECS）上，`--jobs` 的收益比笔记本更大，因为云 CPU 单核较弱、多进程并行能更好吃满多核。
-
-### GPU 加速（可选）
-
-需要 NVIDIA 显卡与驱动：
-
-1. 安装 GPU 依赖：`pip install onnxruntime-gpu`（会替换 CPU 版 onnxruntime），并安装含 `h264_nvenc` 的系统 ffmpeg（如 Ubuntu `apt install ffmpeg`，用 `ffmpeg -encoders | grep nvenc` 验证）；
-2. `config.yaml` 设置 `ocr.use_gpu: true`、`video.encoder: nvenc`（`video.ffmpeg` 留空会自动使用系统 ffmpeg）；
-3. OCR 建议 `--jobs 1~2`（每个进程占用独立 CUDA 显存，过大可能爆显存）；渲染/CFR 用 NVENC，速度数倍于 x264。
-
-> GPU 只影响速度，不影响结果；没有 NVIDIA 显卡时保持默认 `use_gpu: false`、`encoder: x264` 即可。
 
 ### OCR 完成后的全文检查与局部重识别
 

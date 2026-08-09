@@ -1,3 +1,5 @@
+import shutil
+
 import cv2
 import imageio_ffmpeg
 
@@ -16,12 +18,44 @@ def video_info(path):
     return w, h, fps, n
 
 
-def get_ffmpeg():
+def get_ffmpeg(cfg=None):
+    """返回 ffmpeg 可执行文件路径。
+
+    优先级：config 的 video.ffmpeg > nvenc 时系统 PATH 里的 ffmpeg > 内置 ffmpeg。
+    """
+    cfg = cfg or {}
+    vcfg = cfg.get("video") or {}
+    custom = (vcfg.get("ffmpeg") or "").strip()
+    if custom:
+        return custom
+    if (vcfg.get("encoder") or "x264") == "nvenc":
+        exe = shutil.which("ffmpeg")
+        if not exe:
+            raise SystemExit(
+                "nvenc 编码需要系统 ffmpeg（含 h264_nvenc）。"
+                "请先安装并确认 `ffmpeg -encoders` 输出包含 h264_nvenc。"
+            )
+        return exe
     return imageio_ffmpeg.get_ffmpeg_exe()
 
 
-def write_cmd(video_path, width, height, fps, out, crf, preset):
-    exe = get_ffmpeg()
+def get_encoder(cfg=None):
+    """返回视频编码器名：x264 -> libx264；nvenc -> h264_nvenc。"""
+    cfg = cfg or {}
+    enc = (cfg.get("video") or {}).get("encoder") or "x264"
+    return {"x264": "libx264", "nvenc": "h264_nvenc"}.get(enc, "libx264")
+
+
+def encoder_args(cfg, crf, preset):
+    """按配置生成 ffmpeg 视频编码参数（CFR 与渲染共用）。"""
+    if get_encoder(cfg) == "h264_nvenc":
+        # NVENC 不支持 -crf：用 VBR + 质量目标 -cq；preset 取 p1~p7
+        return ["-c:v", "h264_nvenc", "-preset", "p5", "-rc", "vbr", "-cq", str(crf), "-pix_fmt", "yuv420p"]
+    return ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-pix_fmt", "yuv420p"]
+
+
+def write_cmd(video_path, width, height, fps, out, crf, preset, cfg=None):
+    exe = get_ffmpeg(cfg)
     return [
         exe,
         "-hide_banner",
@@ -35,10 +69,7 @@ def write_cmd(video_path, width, height, fps, out, crf, preset):
         "-i", video_path,
         "-map", "0:v:0",
         "-map", "1:a:0?",
-        "-c:v", "libx264",
-        "-preset", preset,
-        "-crf", str(crf),
-        "-pix_fmt", "yuv420p",
+        *encoder_args(cfg, crf, preset),
         "-c:a", "copy",
         "-movflags", "+faststart",
         "-shortest",

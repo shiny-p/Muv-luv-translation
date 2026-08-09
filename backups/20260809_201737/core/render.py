@@ -323,7 +323,7 @@ def run_render(cfg, force=False, video=None):
     if test_frames > 0:
         n_out = min(n_out, test_frames)
 
-    cmd = write_cmd(video, out_w, out_h, target_fps, out, int(rcfg["crf"]), rcfg["preset"], cfg)
+    cmd = write_cmd(video, out_w, out_h, target_fps, out, int(rcfg["crf"]), rcfg["preset"])
     print("渲染输出: %s (%dx%d @%.0ffps) 共 %d 帧" % (out, out_w, out_h, target_fps, n_out))
     proc = subprocess.Popen(
         cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE

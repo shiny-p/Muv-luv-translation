@@ -36,7 +36,6 @@ output: output.mp4             # 输出视频文件名（放在 <视频名>_outp
 ocr:                           # ---- 文字识别 ----
   engine: rapidocr             # 目前可用: rapidocr(本地、免费、支持日文)
   lang: japan                  # 识别语言
-  use_gpu: false               # true=用 onnxruntime-gpu(CUDA) 跑 OCR（需 NVIDIA 显卡，pip install onnxruntime-gpu）
   sample_step: 48              # 每多少帧抽 1 帧做 OCR（60fps 时约 800ms 一次）
   min_score: 0.5               # 识别置信度阈值，低于此值忽略
   min_area: 200                # 最小文字框面积(像素)，过滤噪点
@@ -49,10 +48,6 @@ translation:                   # ---- 文本翻译 ----
   api_key: ""                  # API key，也可以放到环境变量里
   api_key_env: DEEPSEEK_API_KEY
   model: ""                    # 模型名；留空用供应商默认值
-
-video:                         # ---- 视频编码（CFR 与渲染共用）----
-  encoder: x264                # x264=CPU 编码（内置 ffmpeg）；nvenc=GPU 编码（需系统 ffmpeg 含 h264_nvenc）
-  ffmpeg: ""                   # 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置，nvenc 用系统 PATH 里的 ffmpeg）
 
 cfr:                           # ---- 第0步：恒定帧率(CFR)转换 ----
   fps: 0                       # 目标帧率，0=自动（取 render.fps，否则源视频帧率四舍五入）
@@ -82,16 +77,11 @@ DEFAULTS = {
     "ocr": {
         "engine": "rapidocr",
         "lang": "japan",
-        "use_gpu": False,
         "sample_step": 48,
         "min_score": 0.5,
         "min_area": 200,
         "max_text_chars": 80,
         "require_japanese": True,
-    },
-    "video": {
-        "encoder": "x264",
-        "ffmpeg": "",
     },
     "translation": {
         "provider": "deepseek",

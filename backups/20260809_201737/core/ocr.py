@@ -56,24 +56,13 @@ def _iou(box_a, box_b):
 
 
 class RapidOCRBackend:
-    def __init__(self, lang="japan", intra_threads=None, use_gpu=False):
+    def __init__(self, lang="japan", intra_threads=None):
         try:
             from rapidocr import RapidOCR
         except ImportError:
             raise SystemExit("未安装 rapidocr，请运行: pip install rapidocr")
         params = {"Rec.lang_type": lang}
-        if use_gpu:
-            try:
-                import onnxruntime as ort
-            except ImportError:
-                raise SystemExit("未安装 onnxruntime，请运行: pip install onnxruntime-gpu")
-            if "CUDAExecutionProvider" not in ort.get_available_providers():
-                raise SystemExit(
-                    "onnxruntime 未启用 CUDA：请安装 onnxruntime-gpu，"
-                    "并确认 NVIDIA 驱动/CUDA 环境可用（config.yaml 的 ocr.use_gpu=true）"
-                )
-            params["EngineConfig.onnxruntime.use_cuda"] = True
-        elif intra_threads and intra_threads > 0:
+        if intra_threads and intra_threads > 0:
             # 并行 OCR 时每个子进程只占 1 个推理线程，避免多进程互相争抢 CPU
             params["EngineConfig.onnxruntime.intra_op_num_threads"] = int(intra_threads)
         try:
@@ -123,11 +112,7 @@ class RapidOCRBackend:
 def _make_backend(cfg, intra_threads=None):
     engine = cfg["ocr"]["engine"]
     if engine == "rapidocr":
-        return RapidOCRBackend(
-            cfg["ocr"].get("lang", "japan"),
-            intra_threads=intra_threads,
-            use_gpu=bool(cfg["ocr"].get("use_gpu", False)),
-        )
+        return RapidOCRBackend(cfg["ocr"].get("lang", "japan"), intra_threads=intra_threads)
     raise SystemExit("暂不支持的 OCR 引擎: %s（目前可用 rapidocr）" % engine)
 
 

@@ -11,7 +11,7 @@ import subprocess
 from tqdm import tqdm
 
 from .config import video_output_dir
-from .video import video_info, get_ffmpeg, encoder_args
+from .video import video_info, get_ffmpeg
 
 
 def _target_fps(cfg, src_fps):
@@ -55,13 +55,16 @@ def run_cfr(cfg, video, force=False):
     preset = str(cfr.get("preset") or render.get("preset") or "fast")
     crf = str(int(cfr.get("crf") or render.get("crf") or 18))
 
-    exe = get_ffmpeg(cfg)
+    exe = get_ffmpeg()
     cmd = [
         exe, "-hide_banner", "-loglevel", "error", "-y",
         "-i", video,
         "-vf", "fps=%s,setpts=N/(%s*TB)" % (fps, fps),
         "-af", "aresample=async=1",
-        *encoder_args(cfg, crf, preset),
+        "-c:v", "libx264",
+        "-preset", preset,
+        "-crf", crf,
+        "-pix_fmt", "yuv420p",
         "-c:a", "aac",
         "-movflags", "+faststart",
         "-progress", "pipe:1",
