@@ -76,6 +76,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | 字段 | 作用 |
 |---|---|
 | `<视频名>_output/region.json` | 台词区（相对坐标 0~1）；首次自动检测写入，不准可手改，不影响其他视频 |
+| `region.fixed` | 固定台词区 `[left,top,right,bottom]`；非空时**不再调用自动检测**、直接应用（仍生成校验截图），单视频仍可用 region.json / `--region` 覆盖 |
 | `ocr.sample_step` | 每多少帧抽 1 帧识别（默认 48 ≈ 60fps 下 800ms 一次；**不要低于 24**，过密会捕捉逐字渲染中途的不稳定框） |
 | `ocr.use_gpu` | 用 onnxruntime-gpu(CUDA) 跑 OCR（需 NVIDIA 显卡；安装 `pip install onnxruntime-gpu`） |
 | `cfr.fps` | CFR 目标帧率，0=自动（先取 `render.fps`，否则源视频帧率四舍五入） |
@@ -130,6 +131,14 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 - 若个别视频打字极快且停留极短导致某句始终只采到局部文本，可临时把 `sample_step` 降到 32 左右（仍不建议低于 24）。
 
 ## 台词区域识别
+
+### 固定台词区（默认，不调用自动检测）
+
+仓库 `config.yaml` 的 `region.fixed` 已设为固定台词区 `[0.231, 0.773, 0.767, 0.959]`（经多个视频确认通用）。配置后：
+
+- **不再调用自动检测函数**（`detect_dialogue_region` 保留，仅未配置固定区域时兜底）；
+- 仍会生成 4 张 `region_check_*.png` 校验截图并在本对话中展示，供人工确认；
+- 单视频仍可用该视频的 `<视频名>_output/region.json` 或 `--region` 覆盖。
 
 ### 校验截图（必须人工确认）
 

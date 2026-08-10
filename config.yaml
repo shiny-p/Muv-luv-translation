@@ -26,7 +26,7 @@ cfr:
 render:
   append_height: 160
   append_bg: auto
-  width: 1280
+  width: 1920
   fps: 0
   crf: 18
   preset: veryfast
@@ -37,3 +37,9 @@ render:
   frame_margin: 0.03
   font_scale: 0.78
   test_frames: 0
+region:
+  fixed:
+  - 0.231
+  - 0.773
+  - 0.767
+  - 0.959

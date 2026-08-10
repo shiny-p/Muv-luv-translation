@@ -5,7 +5,12 @@ import sys
 from core import config
 from core.cfr import run_cfr
 from core.ocr import run_ocr, run_ocr_range
-from core.regions import detect_dialogue_region, load_dialogue_region, save_dialogue_region
+from core.regions import (
+    detect_dialogue_region,
+    load_dialogue_region,
+    save_dialogue_region,
+    save_fixed_region,
+)
 from core.render import run_render
 from core.translate import run_translate
 
@@ -33,12 +38,40 @@ def _parse_region(video, value):
         raise SystemExit("--region 无效：%s" % exc)
 
 
+def _fixed_region(cfg):
+    """从 config.yaml 读取固定台词区（region.fixed），未配置时返回 None。"""
+    fixed = (cfg.get("region") or {}).get("fixed") or []
+    if not fixed or len(fixed) < 4:
+        return None
+    try:
+        return {
+            "left": float(fixed[0]),
+            "top": float(fixed[1]),
+            "right": float(fixed[2]),
+            "bottom": float(fixed[3]),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
 def _get_region(video, cfg, redetect=False, region_text=None):
+    """解析台词区：--region > 已有 region.json > 固定区域(region.fixed) > 自动检测。
+
+    配置了固定区域时不再调用自动检测（检测函数保留）；固定区域也会生成校验截图。
+    """
     if region_text:
         return _parse_region(video, region_text)
+    fixed = _fixed_region(cfg)
     if redetect:
+        if fixed is not None:
+            return save_fixed_region(video, cfg, fixed)
         return detect_dialogue_region(video, cfg)
-    return load_dialogue_region(video) or detect_dialogue_region(video, cfg)
+    existing = load_dialogue_region(video)
+    if existing:
+        return existing
+    if fixed is not None:
+        return save_fixed_region(video, cfg, fixed)
+    return detect_dialogue_region(video, cfg)
 
 
 def main():
@@ -99,7 +132,7 @@ def main():
         run_cfr(cfg, video, force=args.force)
     elif args.cmd == "regions":
         video = _video(getattr(args, "video", None))
-        detect_dialogue_region(video, cfg)
+        _get_region(video, cfg)
     elif args.cmd == "ocr":
         video = _video(getattr(args, "video", None))
         region = _get_region(video, cfg, args.redetect_region, args.region)

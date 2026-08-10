@@ -65,6 +65,62 @@ def load_dialogue_region(video):
         raise SystemExit("台词区文件无效，请修正或重新检测: %s（%s）" % (path, exc))
 
 
+def save_fixed_region(video, cfg, region):
+    """用固定台词区生成校验截图并保存 region.json（不调用自动检测）。
+
+    固定区域来自 config.yaml 的 region.fixed；校验截图用于人工确认，
+    与自动检测一样生成 SCREENSHOT_COUNT 张。自动检测函数 detect_dialogue_region
+    仍保留，仅在该函数不适用（未配置固定区域）时兜底。
+    """
+    region = _validate_dialogue_region(region)
+    w, h, fps, n = video_info(video)
+    out_dir = video_output_dir(video)
+    os.makedirs(out_dir, exist_ok=True)
+    box = (
+        int(region["left"] * w),
+        int(region["top"] * h),
+        int(region["right"] * w),
+        int(region["bottom"] * h),
+    )
+    cap = cv2.VideoCapture(video)
+    if not cap.isOpened():
+        raise RuntimeError("无法打开视频: %s" % video)
+    safe = int(fps * 10)
+    frames = []
+    if n > SCREENSHOT_COUNT:
+        step = (n - 1) / (SCREENSHOT_COUNT - 1)
+        for i in range(SCREENSHOT_COUNT):
+            fidx = min(n - 1, int(i * step))
+            if fidx < safe:
+                fidx = safe
+            cap.set(cv2.CAP_PROP_POS_FRAMES, fidx)
+            ok, f = cap.read()
+            if ok:
+                frames.append((fidx, f.copy()))
+    else:
+        for i in range(n):
+            cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+            ok, f = cap.read()
+            if ok:
+                frames.append((i, f.copy()))
+    cap.release()
+
+    saved = []
+    for i, (fidx, frame) in enumerate(frames[:SCREENSHOT_COUNT]):
+        img = frame.copy()
+        cv2.rectangle(img, (box[0], box[1]), (box[2], box[3]), (0, 255, 0), 3)
+        path = os.path.join(out_dir, "region_check_%d.png" % i)
+        cv2.imwrite(path, img)
+        saved.append(path)
+    print("固定台词区: %s" % region)
+    print("已生成 %d 张校验截图（绿色框为固定台词区，请确认后继续）:" % len(saved))
+    for p in saved:
+        print("  %s" % p)
+    region = save_dialogue_region(video, region)
+    print("已写入 %s（单视频微调可直接改该文件或使用 --region）" % region_path(video))
+    return region
+
+
 def _to_fraction(x0, y0, x1, y1, w, h, pad):
     x0 = max(0.0, (x0 - pad * w) / w)
     y0 = max(0.0, (y0 - pad * h) / h)

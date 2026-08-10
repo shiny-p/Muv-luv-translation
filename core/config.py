@@ -50,6 +50,9 @@ translation:                   # ---- 文本翻译 ----
   api_key_env: DEEPSEEK_API_KEY
   model: ""                    # 模型名；留空用供应商默认值
 
+region:                        # ---- 台词区 ----
+  fixed: []                      # 固定台词区 [left,top,right,bottom]；非空时不再自动检测、直接应用（仍生成校验截图），单视频仍可用 region.json / --region 覆盖
+
 video:                         # ---- 视频编码（CFR 与渲染共用）----
   encoder: x264                # x264=CPU 编码（内置 ffmpeg）；nvenc=GPU 编码（需系统 ffmpeg 含 h264_nvenc）
   ffmpeg: ""                   # 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置，nvenc 用系统 PATH 里的 ffmpeg）
@@ -94,6 +97,9 @@ DEFAULTS = {
         "encoder": "x264",
         "ffmpeg": "",
         "hwaccel": "",
+    },
+    "region": {
+        "fixed": [],
     },
     "translation": {
         "provider": "deepseek",
