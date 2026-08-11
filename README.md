@@ -48,9 +48,9 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 .venv/bin/python run.py render 1.mp4         # ⑤ 渲染（也可省略视频参数）
 ```
 
-## 成品交付（可选：整文件夹上传百度网盘）
+## 成品交付（可选：整文件夹上传网盘/OSS）
 
-处理完成后建议把**整个 `<视频名>_output/` 文件夹**打成 zip 上传百度网盘（不只是成品视频），
+处理完成后建议把**整个 `<视频名>_output/` 文件夹**打成 zip 上传百度网盘/阿里云盘/恒源云 OSS（不只是成品视频），
 这样 translations.json / segments.json / region.json 也都在手边，后续要改 JSON 不用整条流水线重跑。
 
 ```bash
@@ -60,9 +60,14 @@ cd /hy-tmp && zip -0 -q -r <视频名>_output.zip <视频名>_output/
 # 上传到百度网盘（需先在恒源云控制台授权百度网盘账号，见官方「公共网盘」文档）
 gpushare-cli login -u <恒源云账号> -p <密码>
 gpushare-cli baidu up /hy-tmp/<视频名>_output.zip /MuvLuv_成品/
+
+# 或上传到恒源云 OSS（需先 oss login；实测传输速度通常比网盘快）
+oss login
+oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 ```
 
-- 上传速度取决于网盘账号权益：百度非会员上传上限约 10MB/s（比恒源云 OSS 的约 55KB/s 快一两个数量级）；阿里云盘不限速（推荐，需另行授权）。
+- **上传前先测速选优**：百度网盘/阿里云盘/OSS 的实际传输速度受账号权益、实例出口带宽与时段影响波动很大（实测 OSS 可到数十 MB/s、百度非会员约 10MB/s，且不同时段可能反转）。先用小文件（如 100MB）分别对 `gpushare-cli baidu up`、`gpushare-cli ali up` 与 `oss cp` 各测一次传输速度，选择最快的方式正式上传。
+- 上传速度因账号权益而异：百度非会员上限约 10MB/s，阿里云盘一般不限速（推荐，需另行授权），OSS 通常更快；**一切以实测为准**。
 - `gpushare-cli` 只支持上传单个文件，所以先打成 zip；目前**只能在实例上执行**（其 macOS 版存在写死 `/hy-tmp` 的 bug，Mac 上用不了）。
 - 下载成品时从百度网盘客户端/网页下载即可（非会员下载上限约 1MB/s，会员更快）。
 
