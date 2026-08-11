@@ -14,7 +14,7 @@
 
 ## 环境准备（一次性）
 
-> 在恒源云 GPU 实例上部署：直接运行 `scripts/init_instance.sh`（一键初始化），完整指引见 `恒源云部署指南.md`。本地 macOS 则按下面步骤。
+> 在恒源云 GPU 实例上部署：直接运行 `scripts/init_instance.sh`（一键初始化），完整指引见 `docs/恒源云部署指南.md`。本地 macOS 则按下面步骤。
 
 
 ```bash
