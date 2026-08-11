@@ -63,6 +63,7 @@ cfr:                           # ---- 第0步：恒定帧率(CFR)转换 ----
   crf: 18                      # x264 质量，越小越清晰
   preset: fast                 # x264 编码速度
   suffix: _cfr                 # CFR 文件后缀（<视频名><suffix>.mp4）
+  keep_source: false           # CFR 转换成功后是否保留源视频；false=删除源视频、保留 CFR（省空间）
 
 render:                        # ---- 渲染输出 ----
   append_height: 160           # 底部加高的像素
@@ -113,6 +114,7 @@ DEFAULTS = {
         "crf": 18,
         "preset": "fast",
         "suffix": "_cfr",
+        "keep_source": False,
     },
     "render": {
         "append_height": 160,

@@ -79,7 +79,7 @@ def main():
     sub = ap.add_subparsers(dest="cmd")
 
     sub.add_parser("init", help="生成 config.yaml 配置模板")
-    p = sub.add_parser("cfr", help="第0步：源视频转恒定帧率(CFR)，原始视频与CFR视频一并放入输出文件夹")
+    p = sub.add_parser("cfr", help="第0步：源视频转恒定帧率(CFR)，CFR 放入输出文件夹（默认删除源视频，见 cfr.keep_source）")
     p.add_argument("video", help="视频文件路径")
     p.add_argument("--force", action="store_true")
     p = sub.add_parser("regions", help="检测台词区并生成校验截图（写入该视频的 region.json）")

@@ -31,6 +31,14 @@ SYSTEM_PROMPT_DIALOGUE = (
     "4) 文本中用 ⟨⟨数字⟩⟩ 标注的词语是已确定的译名，必须原样保留该符号，不要翻译或改动。"
 )
 
+SYSTEM_PROMPT_RETRANSLATE = (
+    "你是专业的日语字幕翻译。上次翻译后以下日文台词仍残留日语，请重新翻译成简体中文。"
+    "硬性要求：1) 译文必须全部是简体中文，禁止出现任何日文假名（平假名、片假名）和长音符「ー」；"
+    "2) 专有名词（人名、机构名、作品名等）可以音译或用括号保留原文，但整句话必须是中文；"
+    "3) 只输出译文，不要任何解释、注释、引号或编号；"
+    "4) 文本中用 ⟨⟨数字⟩⟩ 标注的词语是已确定的译名，必须原样保留该符号，不要翻译或改动。"
+)
+
 GLOSSARY_TEMPLATE = """\
 {
   "names": {},
@@ -47,6 +55,33 @@ FORMAT_SPEC = (
 )
 
 REVIEW_SAMPLE_SIZE = 8
+
+
+JP_KANA_RE = re.compile(r"[\u3041-\u3096\u30A1-\u30FA\u30FC]")  # 平假名/片假名/长音符
+
+
+def _looks_garbled(t):
+    return "\ufffd" in t or bool(re.search(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", t))
+
+
+def scan_translation_quality(data):
+    """全量扫描译文，返回可疑条目 [(原文, 译文, 原因)]。
+
+    规则：翻译文本应大部分为中文。译文仍含日文假名（残留日语/未翻译）、
+    为空或含乱码/异常字符的条目，均视为可疑。
+    """
+    suspicious = []
+    for source, translated in data.items():
+        if str(source).startswith("_"):
+            continue
+        t = str(translated).strip() if translated else ""
+        if not t:
+            suspicious.append((source, t, "译文为空"))
+        elif _looks_garbled(t):
+            suspicious.append((source, t, "译文含乱码/异常字符"))
+        elif JP_KANA_RE.search(t):
+            suspicious.append((source, t, "译文仍含假名（残留日语/未翻译）"))
+    return suspicious
 
 
 def load_translations(path=None):
@@ -254,5 +289,28 @@ def run_translate(cfg, force=False, video=None):
     print("翻译完成：%d 条台词 → %s" % (len(data), translations_path))
     if missing:
         print("以下 %d 条翻译失败，可稍后重跑 translate 补齐：%s" % (len(missing), missing))
+    # 全量扫描译文：翻译文本应大部分为中文，发现日语等可疑条目自动重新翻译（最多 2 轮）
+    if not is_mock:
+        for _round in range(2):
+            suspicious = scan_translation_quality(data)
+            auto = [s for s, _t, r in suspicious
+                    if r.startswith("译文仍含假名") or r.startswith("译文为空")]
+            if not auto:
+                break
+            print("全量扫描发现 %d 条译文可疑（残留日语/为空），自动重新翻译（第 %d 轮）..." % (len(auto), _round + 1))
+            for source in auto:
+                src_txt, mapping = _substitute_glossary(source, terms)
+                zh = _safe_translate(client, model, src_txt, SYSTEM_PROMPT_RETRANSLATE)
+                if zh:
+                    data[source] = _restore_glossary(zh, mapping)
+            save_translations(data, translations_path, dial_seen)
+
+    suspicious = scan_translation_quality(data)
+    print("全量扫描完成：%d/%d 条译文可疑%s" % (
+        len(suspicious), len(data),
+        "" if suspicious else "（全部通过，译文均为中文）"))
+    for s, t, r in suspicious:
+        print("  [%s] 日：%s" % (r, s))
+        print("      中：%s" % t)
     _print_translation_review_sample(data)
     return data

@@ -23,6 +23,7 @@ cfr:
   crf: 18
   preset: veryfast
   suffix: _cfr
+  keep_source: false
 render:
   append_height: 160
   append_bg: auto

@@ -31,38 +31,57 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 # 一键全流程（自动转 CFR → 检测台词区 → OCR → 翻译 → 渲染，输出在 1_output/）
 .venv/bin/python run.py all 1.mp4
 
-> ⚠️ **处理规则（必须遵守）**：除非用户明确命令使用 `all`，否则**禁止一键全流程**。必须依照「核心流程」逐步执行：`cfr` → `regions`（展示 4 张校验截图）→ `ocr`（完成后全文检查 `segments.json`）→ `translate`（完成后抽检 `translations.json`）→ `render`。**每个检查点通过后才可进入下一步**，避免翻译/识别出错后重新渲染。
+> ⚠️ **处理规则（必须遵守）**：除非用户明确命令使用 `all`，否则**禁止一键全流程**。必须依照「核心流程」逐步执行：`cfr` → `regions`→ `ocr`（完成后全文检查 `segments.json`）→ `translate`（完成后全量扫描 `translations.json`）→ `render`。**每个检查点通过后才可进入下一步**，避免翻译/识别出错后重新渲染。
 
 # 或分步执行
-.venv/bin/python run.py cfr 1.mp4            # ① 转恒定帧率(CFR)，原始视频与 CFR 视频一并放入 1_output/
+.venv/bin/python run.py cfr 1.mp4            # ① 转恒定帧率(CFR)，CFR 放入 1_output/（默认删除源视频，见 cfr.keep_source）
 .venv/bin/python run.py regions 1.mp4        # ② 检测台词区 + 生成校验截图 + 写入 region.json
 .venv/bin/python run.py ocr 1.mp4            # ③ 按 region.json 做台词区文字识别
 .venv/bin/python run.py ocr-range 1.mp4 --segment 12  # ③ 局部重识别：仅重做第 12 段（或用 --start/--end 按秒定位）
 .venv/bin/python run.py ocr 1.mp4 --redetect-region   # ③ 忽略已有区域，重新检测
 .venv/bin/python run.py ocr 1.mp4 --region 0.223,0.774,0.746,0.923  # ③ 手工指定并保存区域
 .venv/bin/python run.py translate 1.mp4      # ④ 翻译（可省略视频名，自动定位）
-.venv/bin/python run.py translate 1.mp4 --force  # ④ 抽检发现明显误译时，强制重新翻译
+.venv/bin/python run.py translate 1.mp4 --force  # ④ 全量扫描/人工复核发现问题时，强制重新翻译
 .venv/bin/python run.py render 1.mp4         # ⑤ 渲染（也可省略视频参数）
 ```
+
+## 成品交付（可选：整文件夹上传百度网盘）
+
+处理完成后建议把**整个 `<视频名>_output/` 文件夹**打成 zip 上传百度网盘（不只是成品视频），
+这样 translations.json / segments.json / region.json 也都在手边，后续要改 JSON 不用整条流水线重跑。
+
+```bash
+# 实例上：把整个输出文件夹打成 zip（store 模式，视频不压缩、秒级完成）
+cd /hy-tmp && zip -0 -q -r <视频名>_output.zip <视频名>_output/
+
+# 上传到百度网盘（需先在恒源云控制台授权百度网盘账号，见官方「公共网盘」文档）
+gpushare-cli login -u <恒源云账号> -p <密码>
+gpushare-cli baidu up /hy-tmp/<视频名>_output.zip /MuvLuv_成品/
+```
+
+- 上传速度取决于网盘账号权益：百度非会员上传上限约 10MB/s（比恒源云 OSS 的约 55KB/s 快一两个数量级）；阿里云盘不限速（推荐，需另行授权）。
+- `gpushare-cli` 只支持上传单个文件，所以先打成 zip；目前**只能在实例上执行**（其 macOS 版存在写死 `/hy-tmp` 的 bug，Mac 上用不了）。
+- 下载成品时从百度网盘客户端/网页下载即可（非会员下载上限约 1MB/s，会员更快）。
 
 ## 核心流程
 
 ```
 输入视频（命令行参数传入，如 1.mp4）
   ├─ 0. 转恒定帧率(CFR)  用 ffmpeg 把源视频转成严格恒定帧率（`run.py cfr <视频>`；`all` 自动执行）
-  │        原始视频与 CFR 视频一并放入 <视频名>_output/，工作区根目录不残留视频
+  │        CFR 视频放入 <视频名>_output/，工作区根目录不残留视频；按 `cfr.keep_source` 决定源视频去留
+  │        （默认 false=CFR 转换成功后删除源视频、保留 CFR，节省磁盘；源视频保留在本地可随时重传）
   │        目标帧率见 `cfr.fps`（0=自动取 `render.fps`，否则源视频帧率四舍五入）
   ├─ 1. 检测台词区  首次处理视频时自动检测（也可单独运行 `run.py regions <视频>`）
   │        抽帧 OCR → 按位置聚类出「台词区」→ 写入 <视频名>_output/region.json
-  │        → 生成 4 张校验截图 <视频名>_output/region_check_*.png（绿框=检测到的台词区，**必须人工确认绿框只框住台词、不含人名标签/HUD 杂字**）
+  │        → 生成 4 张校验截图 <视频名>_output/region_check_*.png（绿框=检测到的台词区，**必须确认绿框只框住台词、不含人名标签/HUD 杂字**）
   ├─ 2. OCR       读取该视频的 region.json → 按设定间隔抽帧 → 只在台词区内识别 → 字幕段聚合/精修
   │        → **OCR 完成后，智能体必须完整检查 `segments.json` 的全部文本。发现乱码、无意义符号等明显不属于正常文本的内容时，优先进行局部 OCR 重识别后再翻译；不要求理解或校对具体台词内容。**
   ├─ 3. 翻译      台词中的词典词(glossary.json)先占位保护；其余文本并发调用翻译模型（已关闭思考模式）
   │               结果写入 translations.json（原文+译文+时间戳整合在一条记录里），可手工校对
-  │        → **翻译完成后，智能体必须随机抽检原文—译文对；发现乱码、无意义符号等明显不属于正常文本的内容时，必须重新发起翻译并再次抽检；不要求理解或评估具体内容的翻译质量。**
+  │        → **翻译完成后，程序对全部译文做全量扫描（规则：翻译文本应大部分为中文）；凡译文仍含日文假名、为空或含乱码的条目，自动重新翻译（最多 2 轮），并列出剩余可疑条目供智能体复核；不要求理解或评估具体内容的翻译质量。**
   └─ 4. 渲染      原画面保留 + 底部加高条带绘制中文（台词居中）
        输出到 <视频名>_output/ 文件夹：
-         <视频名>.mp4      原始视频（第0步移入；工作区根目录不残留）
+         <视频名>.mp4      源视频（第0步移入；cfr.keep_source=false 时转换成功后已删除）
          <视频名>_cfr.mp4  恒定帧率转换后的视频（后续 OCR/翻译/渲染基于它）
          output.mp4        最终视频（保留原音频）
          translations.json 该视频的翻译与时间戳
@@ -70,7 +89,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
          region.json       该视频的台词区（可手工编辑）
          region_check_*.png 台词区校验截图
 ```
-
+> 处理完一个视频后，与其有关的所有文件都收进 `<视频名>_output/`，根目录保持整洁。
 ## 配置项速查（config.yaml）
 
 | 字段 | 作用 |
@@ -85,11 +104,12 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | `video.hwaccel` | 解码硬加速：`""`=CPU 解码；`cuda`=用 NVDEC/CUDA 硬解源帧（需 NVIDIA 显卡 + 系统 ffmpeg，渲染/CFR 显著提速） |
 | `cfr.crf` / `cfr.preset` | CFR 转换质量/速度（crf 默认 18；preset 默认 fast，仓库 config.yaml 已改为 veryfast 提速） |
 | `cfr.suffix` | CFR 文件名后缀（默认 `_cfr`，即 `<视频名>_cfr.mp4`） |
+| `cfr.keep_source` | CFR 转换成功后是否保留源视频（默认 `false`=删除源视频、保留 CFR，省空间；`true`=都保留） |
 | `translation.provider` | `deepseek` / `openai` / `qwen` / `mock`（mock 免 key，用于流程验证） |
 | `translation.model` | 模型名，如 `deepseek-v4-flash`（程序已自动关闭思考模式以提速） |
 | `render.append_height` | 底部加高像素（默认 160） |
 | `render.append_bg` | 条带底色：`auto`（匹配台词框暖灰，推荐）/ `black` / `#RRGGBB` |
-| `render.width` | 输出宽度，0=保持原分辨率（仓库 config.yaml 已设为 1280 提速） |
+| `render.width` | 输出宽度，0=保持原分辨率（仓库 config.yaml 已设为 1920；性能不足可调低） |
 | `render.preset` / `render.crf` | 渲染编码速度/质量（仓库 config.yaml 已设为 veryfast / 18） |
 | `render.font_scale` | 全局字号 = 字幕框高度中位数 × 此系数 |
 | `render.test_frames` | 调试用：只渲染前 N 帧（0=全部） |
@@ -103,7 +123,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | `.env` | 密钥环境变量（DeepSeek key），**勿提交/外泄** |
 | `requirements.txt` | Python 依赖 |
 | `core/` | 核心代码 |
-| ├─ `cfr.py` | 第0步：ffmpeg 恒定帧率(CFR)转换 + 原始视频归档到输出文件夹 |
+| ├─ `cfr.py` | 第0步：ffmpeg 恒定帧率(CFR)转换；默认删源视频保留 CFR（`cfr.keep_source`） |
 | ├─ `regions.py` | 台词区自动检测 + 校验截图生成 |
 | ├─ `ocr.py` | OCR 引擎封装 + 台词区抽帧识别 + 字幕段聚合/精修 |
 | ├─ `translate.py` | 翻译供应商抽象（关闭思考模式、并发）+ 词典替换 + 缓存 |
@@ -111,11 +131,11 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | ├─ `video.py` | 视频信息、ffmpeg 管道编码 |
 | └─ `config.py` | 配置加载/默认值/.env |
 | `glossary.json` | **翻译词典**：`names`（人名）+ `proper_nouns`（专有名词），台词中出现时按译名直接替换 |
-| `<视频名>_output/` | 该视频的全部文件（原始视频、CFR 视频、成品、翻译、OCR缓存、台词区、校验截图） |
+| `<视频名>_output/` | 该视频的全部文件（CFR 视频、成品、翻译、OCR缓存、台词区、校验截图；源视频按 `cfr.keep_source` 决定去留） |
 | `backups/` | 程序完整备份（按时间戳归档全部源码与配置），需回退时把对应子目录内容复制回项目根即可 |
 | `tools/region_selector/` | 手动框选台词区工具（最后手段）：浏览器打开 `selector.html` 拖框选台词区并输出归一化坐标；示例画面在 `frames/`（已 gitignore） |
 
-> 处理完一个视频后，与其有关的所有文件都收进 `<视频名>_output/`，根目录保持整洁。
+
 
 ## 逐字显示模式应对和采样建议
 
@@ -137,14 +157,14 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 仓库 `config.yaml` 的 `region.fixed` 已设为固定台词区 `[0.231, 0.773, 0.767, 0.959]`（经多个视频确认通用）。配置后：
 
 - **不再调用自动检测函数**（`detect_dialogue_region` 保留，仅未配置固定区域时兜底）；
-- 仍会生成 4 张 `region_check_*.png` 校验截图并在本对话中展示，供人工确认；
+- 仍会生成 `region_check_*.png` 校验截图供人工确认；固定区域已确认稳定后，**处理时无需逐次展示校验图，直接继续后续步骤**（如需查看可要求展示，发现问题则人工喊停）；
 - 单视频仍可用该视频的 `<视频名>_output/region.json` 或 `--region` 覆盖。
 
-### 校验截图（必须人工确认）
+### 校验截图
 
 `<视频名>_output/region_check_*.png` 是检测出的台词区校验截图（绿框），**首次处理或重新检测区域后必须打开检查**：绿框应只框住台词区——既不能漏掉台词，也不能框入顶部人名标签、右上角计时器等杂字。识别是否干净直接决定后续 OCR 与翻译质量。
 
-**执行规则（处理方必须遵守）**：区域检测完成后，必须把 4 张 `region_check_*.png` **在本对话中展示出来**（以图片形式贴出），或调用系统「预览」打开这些图片；展示后**直接继续 OCR 等后续流程，无需等待人工确认**——除非人工主动指出区域不准并中止，否则按流程执行；若人工指出不准，按下面方法修正区域后重跑 `ocr --force`。
+**执行规则（处理方必须遵守）**：展示后**直接继续 OCR 等后续流程，无需等待人工确认**——除非人工主动指出区域不准并中止，否则按流程执行；若人工指出不准，按下面方法修正区域后重跑 `ocr --force`。
 
 若不准，编辑该视频输出目录的 `region.json`，或用 `--region left,top,right,bottom` 保存手工区域后重跑 `ocr --force`；区域文件不会影响其他视频。
 
@@ -211,9 +231,16 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 
 ## 翻译
 
-### 翻译完成后的随机抽检与重译
+### 翻译完成后的全量扫描与自动重译
 
-每次 `translate` 完成时，程序会随机输出最多 8 条“日文原文—中文译文”供智能体检查。此处的“明显错误”也仅指乱码、无意义符号、无法构成正常文本的内容；无需理解原文或判断译文的语义、语气、术语和通顺程度。发现此类问题时，必须运行 `run.py translate <视频> --force` 重新发起翻译，完成后再次抽检。`--force` 会重译全部非词典锁定的台词；`glossary.json` 中的既定译名仍会保留。
+每次 `translate` 完成后，程序会对**全部译文**做全量扫描（而非仅随机抽几条）：
+
+- **规则（必须遵守）**：翻译文本应大部分为中文。译文仍含日文假名（平假名/片假名/长音符）、为空、或含乱码/异常字符的条目，均判定为可疑。
+- 对「残留日语 / 译文为空」的可疑条目，程序会用更严格的重译指令**自动重新翻译**（最多 2 轮）；重译后仍可疑的，会列在扫描报告中。
+- 扫描报告列出剩余可疑条目（原因—原文—译文），智能体只需复核这些条目；**无需理解原文或判断译文的语义、语气、术语和通顺程度**（语义级校对属人工或更强模型范畴）。
+- 若人工复核仍不通过，运行 `run.py translate <视频> --force` 强制重译全部非词典锁定的台词，完成后会再次自动扫描；`glossary.json` 中的既定译名仍会保留。
+
+> 说明：日文假名是中文中不会出现的字符，因此「译文含假名」是“未翻译/残留日语”的可靠信号；纯汉字组成的日语句（如「本日晴天」）与中文无法区分，不在自动判定范围内。
 
 ### 翻译词典（glossary.json）
 
