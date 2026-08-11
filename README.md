@@ -106,7 +106,7 @@ gpushare-cli baidu up /hy-tmp/<视频名>_output.zip /MuvLuv_成品/
 | `cfr.suffix` | CFR 文件名后缀（默认 `_cfr`，即 `<视频名>_cfr.mp4`） |
 | `cfr.keep_source` | CFR 转换成功后是否保留源视频（默认 `false`=删除源视频、保留 CFR，省空间；`true`=都保留） |
 | `translation.provider` | `deepseek` / `openai` / `qwen` / `mock`（mock 免 key，用于流程验证） |
-| `translation.model` | 模型名，如 `deepseek-v4-flash`（程序已自动关闭思考模式以提速） |
+| `translation.model` | 模型名，如 `deepseek-v4-flash-0731`（千问 DashScope 上的 DeepSeek 模型，程序已自动关闭思考模式以提速） |
 | `render.append_height` | 底部加高像素（默认 160） |
 | `render.append_bg` | 条带底色：`auto`（匹配台词框暖灰，推荐）/ `black` / `#RRGGBB` |
 | `render.width` | 输出宽度，0=保持原分辨率（仓库 config.yaml 已设为 1920；性能不足可调低） |
@@ -294,8 +294,9 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 
 ## 常见问题
 
-- **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`
-- **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash`）；程序已禁用思考模式并启用 6 路并发，数百条台词通常 1~3 分钟完成
+- **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`（DeepSeek） / `DASHSCOPE_API_KEY`（千问）
+- **切换翻译供应商**：改 `config.yaml` 的 `translation.provider/base_url/api_key_env/model` 即可，多个 key 可同时保留在 `.env` 随时切换（如 deepseek 用 `deepseek-v4-flash`，千问 DashScope 用 `deepseek-v4-flash-0731`）
+- **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash-0731`）；程序已禁用思考模式并启用 6 路并发，数百条台词通常 1~3 分钟完成
 - **台词区不准 / 识别不干净**：查看 `region_check_*.png`，确认绿框只框住台词；若框入了人名标签、计时器等杂字，手动收紧该视频 `region.json` 或使用 `--region` 后重跑 `ocr --force`；若自动检测始终不准（如人名嵌在对话框顶部的游戏），用 `tools/region_selector/selector.html` 手动框选（见「台词区域识别」）
 - **人名/说话人标签被识别进去了**：本工具不识别、不翻译人名标签。出现说明台词区框得太松，收紧该视频区域后重跑 `ocr --force`
 - **字幕逐字显示导致碎片/重复**：程序已自动用模糊前缀合并把打字前缀链合并为完整句；保持 `ocr.sample_step` ≥ 24 即可。若仍有局部文本残留，可临时把 `sample_step` 调到 32 左右或手动清理 `segments.json`

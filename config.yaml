@@ -9,11 +9,11 @@ ocr:
   max_text_chars: 80
   require_japanese: true
 translation:
-  provider: deepseek
-  base_url: https://api.deepseek.com
+  provider: qwen
+  base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
   api_key: ''
-  api_key_env: DEEPSEEK_API_KEY
-  model: deepseek-v4-flash
+  api_key_env: DASHSCOPE_API_KEY
+  model: deepseek-v4-flash-0731
 video:
   encoder: x264
   ffmpeg: ''
