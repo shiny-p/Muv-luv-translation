@@ -48,28 +48,6 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 .venv/bin/python run.py render 1.mp4         # ⑤ 渲染（也可省略视频参数）
 ```
 
-## 成品交付（可选：整文件夹上传网盘/OSS）
-
-处理完成后建议把**整个 `<视频名>_output/` 文件夹**打成 zip 上传百度网盘/阿里云盘/恒源云 OSS（不只是成品视频），
-这样 translations.json / segments.json / region.json 也都在手边，后续要改 JSON 不用整条流水线重跑。
-
-```bash
-# 实例上：把整个输出文件夹打成 zip（store 模式，视频不压缩、秒级完成）
-cd /hy-tmp && zip -0 -q -r <视频名>_output.zip <视频名>_output/
-
-# 上传到百度网盘（需先在恒源云控制台授权百度网盘账号，见官方「公共网盘」文档）
-gpushare-cli login -u <恒源云账号> -p <密码>
-gpushare-cli baidu up /hy-tmp/<视频名>_output.zip /MuvLuv_成品/
-
-# 或上传到恒源云 OSS（需先 oss login；实测传输速度通常比网盘快）
-oss login
-oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
-```
-
-- **上传前先测速选优**：百度网盘/阿里云盘/OSS 的实际传输速度受账号权益、实例出口带宽与时段影响波动很大（实测 OSS 可到数十 MB/s、百度非会员约 10MB/s，且不同时段可能反转）。先用小文件（如 100MB）分别对 `gpushare-cli baidu up`、`gpushare-cli ali up` 与 `oss cp` 各测一次传输速度，选择最快的方式正式上传。
-- 上传速度因账号权益而异：百度非会员上限约 10MB/s，阿里云盘一般不限速（推荐，需另行授权），OSS 通常更快；**一切以实测为准**。
-- `gpushare-cli` 只支持上传单个文件，所以先打成 zip；目前**只能在实例上执行**（其 macOS 版存在写死 `/hy-tmp` 的 bug，Mac 上用不了）。
-- 下载成品时从百度网盘客户端/网页下载即可（非会员下载上限约 1MB/s，会员更快）。
 
 ## 核心流程
 
@@ -114,7 +92,7 @@ oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 | `cfr.suffix` | CFR 文件名后缀（默认 `_cfr`，即 `<视频名>_cfr.mp4`） |
 | `cfr.keep_source` | CFR 转换成功后是否保留源视频（默认 `false`=删除源视频、保留 CFR，省空间；`true`=都保留） |
 | `translation.provider` | `deepseek` / `openai` / `qwen` / `mock`（mock 免 key，用于流程验证） |
-| `translation.model` | 模型名，如 `deepseek-v4-flash-0731`（千问 DashScope 上的 DeepSeek 模型，程序已自动关闭思考模式以提速） |
+| `translation.model` | 模型名，如 `deepseek-v4-flash`（程序已自动关闭思考模式以提速）；切千问 DashScope 可用 `deepseek-v4-flash-0731` |
 | `render.append_height` | 底部加高像素（默认 160） |
 | `render.append_bg` | 条带底色：`auto`（匹配台词框暖灰，推荐）/ `black` / `#RRGGBB` |
 | `render.width` | 输出宽度，0=保持原分辨率（仓库 config.yaml 已设为 1920；性能不足可调低） |
@@ -142,7 +120,6 @@ oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 | `<视频名>_output/` | 该视频的全部文件（CFR 视频、成品、翻译、OCR缓存、台词区、校验截图；源视频按 `cfr.keep_source` 决定去留） |
 | `backups/` | 程序完整备份（按时间戳归档全部源码与配置），需回退时把对应子目录内容复制回项目根即可 |
 | `tools/region_selector/` | 手动框选台词区工具（最后手段）：浏览器打开 `selector.html` 拖框选台词区并输出归一化坐标；示例画面在 `frames/`（已 gitignore） |
-
 
 
 ## 逐字显示模式应对和采样建议
@@ -276,22 +253,18 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 
 ## 并行处理与调度建议（实测经验）
 
-### 可并行（推荐）
-
-- **渲染视频 A 的同时，并行处理视频 B 的 CFR/OCR/翻译**：渲染主要占用 NVENC 编码 + CPU 画字幕；CFR 走 NVENC（独立编码会话，实测对渲染影响小）；OCR 走 GPU 推理（可错峰）；翻译走 API（不占实例算力）。实测这种调度把整批总耗时省了约 1/3。
+- **渲染视频 A 的同时，尝试并行处理视频 B 的 CFR/OCR/翻译**：渲染主要占用 NVENC 编码 + CPU 画字幕；CFR 走 NVENC（独立编码会话，实测对渲染影响小）；OCR 走 GPU 推理（可错峰）；翻译走 API（不占实例算力）。实测这种调度把整批总耗时省了约 1/3。
 - **OCR 多进程 `--jobs`**：并行抽帧识别，结果与串行完全一致；多核机器上收益明显。
 - **CPU 核数足够时并行跑 2 个渲染**：渲染是 CPU 密集（OpenCV/PIL 逐帧画字幕），也是全流程最耗时的一步（1920×945@60fps 约 45~58 帧/秒，单视频 10~15 分钟）。消费级显卡 NVENC 并发会话约 3 路，**最多并行 2 路渲染**（2 渲染 + 1 CFR 会踩线）。
 
-### 不要并行（踩过的坑）
-
-- **渲染与 OCR 不要同时跑**：实测渲染速度会从约 49 帧/秒掉到约 24 帧/秒（GPU 解码与 OCR 推理争抢）。等当前渲染完成，再做下一视频的 OCR。
 - **`gpushare-cli` 上传百度一次只跑一个**：两个上传并发会导致其本地数据库锁冲突直接 panic 崩溃（实测多洛缇雅上传因此失败一次，重传才成功）；上传进行中也**不要执行 `baidu ls`**（同样会 panic）。上传完成后用 `baidu ls` 核对文件确实在网盘（实测曾出现"报上传完成但实际未进网盘"，需重传）。
 
 ### 并行度实测数据（RTX 3090 + 8 vCPU 实例）
 
 - OCR `--jobs 2` 约 4 分钟，`--jobs 6` 约 3.5 分钟——只快约 12%。**OCR 瓶颈不是进程数**，而是受 CPU 核数上限、逐帧 GPU 推理、磁盘读帧限制。
 - GPU 计算利用率约 30% 是正常的：NVENC/NVDEC 是独立硬件引擎，不占通用 CUDA 核心；OCR 模型小、逐帧推理是延迟敏感型；渲染主要耗 CPU。
-- **GPU 算力对本管线"溢出"**，但 NVENC/NVDEC/GPU 推理仍是提速关键——换成无 GPU 的纯 CPU 实例，渲染退化为 x264 软件编码会慢数倍，总耗时反而增加。
+
+>并行处理受到实例配置影响极大，必须结合实例配置选择并行处理方式
 
 ### 实例配置建议
 
@@ -300,11 +273,34 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 - 显存 ≥8GB（OCR `--jobs 2~3` 够用）；内存 ≥16GB（渲染要读 3.5~5GB 的 CFR 文件）。
 - 上传速度受**实例出口带宽**限制（实测约 4.5MB/s），会员权益只影响下载端；实例→网盘上传换配置也不会更快。上传仍首选百度（实测阿里云盘从实例上传仅约 0.5MB/s）。
 
+## 成品交付（可选：整文件夹上传网盘/OSS）
+
+处理完成后建议把**整个 `<视频名>_output/` 文件夹**打成 zip 上传百度网盘/阿里云盘/恒源云 OSS（不只是成品视频），
+这样 translations.json / segments.json / region.json 也都在手边，后续要改 JSON 不用整条流水线重跑。
+
+```bash
+# 实例上：把整个输出文件夹打成 zip（store 模式，视频不压缩、秒级完成）
+cd /hy-tmp && zip -0 -q -r <视频名>_output.zip <视频名>_output/
+
+# 上传到百度网盘（需先在恒源云控制台授权百度网盘账号，见官方「公共网盘」文档）
+gpushare-cli login -u <恒源云账号> -p <密码>
+gpushare-cli baidu up /hy-tmp/<视频名>_output.zip /MuvLuv_成品/
+
+# 或上传到恒源云 OSS（需先 oss login）
+oss login
+oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
+```
+
+- **上传前先测速选优**：百度网盘/阿里云盘/OSS 的实际传输速度受账号权益、实例出口带宽与时段影响波动很大（实测 OSS 可到数十 MB/s、百度非会员约 10MB/s，且不同时段可能反转）。先用小文件（如 100MB）分别对 `gpushare-cli baidu up`、`gpushare-cli ali up` 与 `oss cp` 各测一次传输速度，选择最快的方式正式上传。
+- 上传速度因账号权益而异：百度非会员上限约 10MB/s，阿里云盘一般不限速（推荐，需另行授权），OSS 通常更快；**一切以实测为准**。
+- `gpushare-cli` 只支持上传单个文件，所以先打成 zip；目前**只能在实例上执行**
+
+
 ## 常见问题
 
 - **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`（DeepSeek） / `DASHSCOPE_API_KEY`（千问）
 - **切换翻译供应商**：改 `config.yaml` 的 `translation.provider/base_url/api_key_env/model` 即可，多个 key 可同时保留在 `.env` 随时切换（如 deepseek 用 `deepseek-v4-flash`，千问 DashScope 用 `deepseek-v4-flash-0731`）
-- **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash-0731`）；程序已禁用思考模式并启用 6 路并发，数百条台词通常 1~3 分钟完成
+- **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash`）；程序已禁用思考模式并启用 6 路并发，数百条台词通常 1~3 分钟完成
 - **台词区不准 / 识别不干净**：查看 `region_check_*.png`，确认绿框只框住台词；若框入了人名标签、计时器等杂字，手动收紧该视频 `region.json` 或使用 `--region` 后重跑 `ocr --force`；若自动检测始终不准（如人名嵌在对话框顶部的游戏），用 `tools/region_selector/selector.html` 手动框选（见「台词区域识别」）
 - **人名/说话人标签被识别进去了**：本工具不识别、不翻译人名标签。出现说明台词区框得太松，收紧该视频区域后重跑 `ocr --force`
 - **字幕逐字显示导致碎片/重复**：程序已自动用模糊前缀合并把打字前缀链合并为完整句；保持 `ocr.sample_step` ≥ 24 即可。若仍有局部文本残留，可临时把 `sample_step` 调到 32 左右或手动清理 `segments.json`
