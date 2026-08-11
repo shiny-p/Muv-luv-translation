@@ -14,6 +14,9 @@
 
 ## 环境准备（一次性）
 
+> 在恒源云 GPU 实例上部署：直接运行 `scripts/init_instance.sh`（一键初始化），完整指引见 `docs/恒源云部署指南.md`。本地 macOS 则按下面步骤。
+
+
 ```bash
 python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebrew/bin/python3.12）
 .venv/bin/pip install --upgrade pip
