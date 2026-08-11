@@ -91,7 +91,7 @@ fi
 command -v ffmpeg >/dev/null 2>&1 || echo "!! 找不到 ffmpeg（后续 NVENC 校验将失败）"
 
 echo "========== [2/7] 校验 NVENC =========="
-if ffmpeg -hide_banner -encoders 2>/dev/null | grep -q h264_nvenc; then
+if ffmpeg -hide_banner -encoders 2>/dev/null | grep h264_nvenc >/dev/null; then
   echo "OK: ffmpeg 支持 h264_nvenc"
 else
   echo "!! h264_nvenc 不可用。请先: apt-get install -y ffmpeg"
@@ -116,7 +116,9 @@ fi
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
 # GPU OCR：替换 CPU 版 onnxruntime
-.venv/bin/pip install -q onnxruntime-gpu || echo "!! onnxruntime-gpu 安装失败（可后续手动处理）"
+# 恒源云默认镜像为 CUDA 12.4 + cuDNN 9.x，固定 onnxruntime-gpu 1.19.2（匹配 CUDA 12）；
+# 注意：onnxruntime >= 1.23 需要 CUDA 13，在恒源云默认实例上 CUDA provider 会加载失败。
+.venv/bin/pip install -q "onnxruntime-gpu==1.19.2" || echo "!! onnxruntime-gpu 安装失败（可后续手动处理）"
 
 echo "========== [5/7] 写入 GPU 配置 =========="
 # 定位中文字体（优先 Noto CJK，找不到则用 fc-list 兜底）
