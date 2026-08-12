@@ -119,6 +119,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | `glossary.json` | **翻译词典**：`names`（人名）+ `proper_nouns`（专有名词），台词中出现时按译名直接替换 |
 | `<视频名>_output/` | 该视频的全部文件（CFR 视频、成品、翻译、OCR缓存、台词区、校验截图；源视频按 `cfr.keep_source` 决定去留） |
 | `backups/` | 程序完整备份（按时间戳归档全部源码与配置），需回退时把对应子目录内容复制回项目根即可 |
+| `scripts/shutdown_gpushare.sh` / `.md` | 恒源云实例一键开关机脚本与操作指南（见「关机控制」章节） |
 | `tools/region_selector/` | 手动框选台词区工具（最后手段）：浏览器打开 `selector.html` 拖框选台词区并输出归一化坐标；示例画面在 `frames/`（已 gitignore） |
 
 
@@ -305,6 +306,19 @@ oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 - `gpushare-cli` 只支持上传单个文件，所以先打成 zip；目前**只能在实例上执行**
 
 
+## 关机控制（实例开关机）
+
+处理完视频后，可用 `scripts/shutdown_gpushare.sh` 在恒源云网页一键**关闭/启动实例**（模拟网页点击，适合深夜无人值守；首次运行 `--login` 登录一次，之后免登录）：
+
+```bash
+bash scripts/shutdown_gpushare.sh --shutdown   # 关机（默认按 .env 的 GPUSHARE_INSTANCE_NAME 定位）
+bash scripts/shutdown_gpushare.sh --start      # 启动（自动找「显卡空闲可启动」的实例）
+```
+
+详细用法、配置、参数与常见问题见 **[scripts/shutdown_gpushare.md](scripts/shutdown_gpushare.md)**。
+
+
+
 ## 常见问题
 
 - **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`（DeepSeek） / `DASHSCOPE_API_KEY`（千问）
@@ -325,4 +339,4 @@ oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 
     可用 `ffmpeg -i output_cfr.mp4 -map 0:v:0 -vf showinfo -f null - 2>&1 | grep -o pts_time:[0-9.]*` 检查帧间隔是否恒为 1/60。
 - **密钥勿外泄**：`.env`、缓存、`*_output/` 已列入 `.gitignore`
-- **自动开关实例（深夜无人值守）**：处理完视频后运行 `bash scripts/shutdown_gpushare.sh --shutdown` 关闭实例、`--start` 启动实例（关机默认按 `.env` 的 `GPUSHARE_INSTANCE_NAME` 定位；`--start` 不指定名称时会**自动找到「显卡空闲可启动」的实例**启动，也可加 `--instance-name <名称>` 指定；目标状态已满足时幂等提示，不会重复操作）。首次需先运行 `bash scripts/shutdown_gpushare.sh --login`：账号/密码从 `.env` 的 `GPUSHARE_USERNAME/GPUSHARE_PASSWORD` 自动填入，只需人工输入验证码，登录态（cookie）显式保存到 `~/.gpushare-auto/storage.json`，之后免登录。操作走「实例管理」下拉（hover 展开）→ 关机/启动 → 弹窗确认按钮（关机「我已了解风险，立即关机」/ 启动「确认启动」），关键步骤自动截图到 `~/.gpushare-auto/shots/`。
+- **实例开关机**：见「关机控制」章节与 `scripts/shutdown_gpushare.md` 操作指南
