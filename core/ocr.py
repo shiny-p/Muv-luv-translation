@@ -410,16 +410,46 @@ def _ocr_regions(dialogue_region, w, h):
     ]
 
 
+def _effective_cpu_count():
+    """返回实例实际可用的 CPU 核数。
+
+    优先读取 cgroup 配额（容器/云实例常见，宿主核数往往大于实际配额，
+    按宿主核数开线程会导致严重超订、互相拖慢）；读不到再回退 os.cpu_count()。
+    """
+    try:
+        p = "/sys/fs/cgroup/cpu.max"  # cgroup v2: "quota period"
+        if os.path.exists(p):
+            with open(p) as f:
+                quota, period = f.read().split()
+            if quota.strip().isdigit() and int(quota) > 0:
+                return max(1, int(quota) // int(period))
+    except Exception:
+        pass
+    try:
+        q = "/sys/fs/cgroup/cpu/cpu.cfs_quota_us"  # cgroup v1
+        per = "/sys/fs/cgroup/cpu/cpu.cfs_period_us"
+        if os.path.exists(q) and os.path.exists(per):
+            with open(q) as f:
+                quota = int(f.read().strip())
+            with open(per) as f:
+                period = int(f.read().strip())
+            if quota > 0:
+                return max(1, quota // period)
+    except Exception:
+        pass
+    try:
+        return os.cpu_count() or 1
+    except Exception:
+        return 1
+
+
 def default_jobs():
     """OCR 并行进程数默认值。
 
     <=2 核不并行（单进程多线程更快）；否则取 CPU 核数的一半（上限 8），
     每个子进程约分到 2 个推理线程，实测吞吐最优。
     """
-    try:
-        n = os.cpu_count() or 1
-    except Exception:
-        n = 1
+    n = _effective_cpu_count()
     if n <= 2:
         return 1
     return max(2, min(n // 2, 8))
@@ -514,11 +544,9 @@ def _collect_detections(video, cfg, dialogue_region, w, h, start_frame, end_fram
         )
 
     chunks = _split_ocr_chunks(sample_indices, jobs)
-    try:
-        cpu_n = os.cpu_count() or 1
-    except Exception:
-        cpu_n = 1
-    intra = max(1, cpu_n // jobs)  # 每个子进程分到的推理线程数
+    cpu_n = _effective_cpu_count()
+    # 每个子进程分到的推理线程数；设上限 4 避免超订（GPU 推理本身串行）
+    intra = max(1, min(cpu_n // jobs, 4))
     payloads = [
         (video, cfg, dialogue_region, w, h, chunk, step, intra)
         for chunk in chunks if chunk
