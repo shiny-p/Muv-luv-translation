@@ -49,6 +49,8 @@ translation:                   # ---- 文本翻译 ----
   api_key: ""                  # API key，也可以放到环境变量里
   api_key_env: DEEPSEEK_API_KEY
   model: ""                    # 模型名；留空用供应商默认值
+  mode: script                 # script=整段剧本翻译（推荐，模型按上下文处理人名/歧义）；line=逐行翻译
+  script_chunk_lines: 50       # 剧本模式每块台词数（越大上下文越全，但单请求更慢/更易超限）
 
 region:                        # ---- 台词区 ----
   fixed: []                      # 固定台词区 [left,top,right,bottom]；非空时不再自动检测、直接应用（仍生成校验截图），单视频仍可用 region.json / --region 覆盖
@@ -108,6 +110,8 @@ DEFAULTS = {
         "api_key": "",
         "api_key_env": "DEEPSEEK_API_KEY",
         "model": "",
+        "mode": "script",
+        "script_chunk_lines": 50,
     },
     "cfr": {
         "fps": 0,

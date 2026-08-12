@@ -14,6 +14,8 @@ translation:
   api_key: ''
   api_key_env: DEEPSEEK_API_KEY
   model: deepseek-v4-flash
+  mode: script
+  script_chunk_lines: 50
 video:
   encoder: x264
   ffmpeg: ''

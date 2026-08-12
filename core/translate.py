@@ -3,7 +3,7 @@ import os
 import random
 import re
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config import (
     GLOSSARY_PATH,
@@ -38,6 +38,22 @@ SYSTEM_PROMPT_RETRANSLATE = (
     "3) 只输出译文，不要任何解释、注释、引号或编号；"
     "4) 文本中用 ⟨⟨数字⟩⟩ 标注的词语是已确定的译名，必须原样保留该符号，不要翻译或改动。"
 )
+
+
+SYSTEM_PROMPT_SCRIPT = (
+    "你是专业的日语字幕翻译。下面是一段日文台词剧本，每一行格式为：\n"
+    "[行号] 日文原文\n"
+    "请把每一行翻译成简体中文。\n"
+    "输出格式必须为（行号、顺序、行数必须与输入完全一致）：\n"
+    "[行号] 中文译文\n"
+    "要求：\n"
+    "1) 只输出译文列表，不要任何解释、注释、标题或额外内容；\n"
+    "2) 翻译自然口语化，符合中文表达习惯，保留原文的语气与换行结构；\n"
+    "3) 人名、专有名词按下方词典翻译；词典未覆盖的交给你的判断；\n"
+    "4) 每一行都必须输出译文，不能合并、跳过或自行拆分行。\n"
+)
+
+_SCRIPT_LINE_RE = re.compile(r"^\s*\[(\d+)\]\s*(.+?)\s*$")
 
 GLOSSARY_TEMPLATE = """\
 {
@@ -207,6 +223,51 @@ def _safe_translate(client, model, text, system_prompt):
     return None
 
 
+def _first_seen_order(segments):
+    """按时间序返回不重复台词的首次出现顺序。"""
+    seen, out = set(), []
+    for s in segments:
+        if s["text"] not in seen:
+            seen.add(s["text"])
+            out.append(s["text"])
+    return out
+
+
+def _chunk_lines(lines, size):
+    """把 [(id, text), ...] 切成连续小块，保留相邻上下文。"""
+    size = max(1, int(size or 50))
+    return [lines[i:i + size] for i in range(0, len(lines), size)]
+
+
+def _glossary_block(terms, script_text):
+    """把剧本中出现过的词典词拼成系统提示词块（按长度倒序，避免歧义）。"""
+    hits = sorted(((k, v) for k, v in terms.items() if k in script_text),
+                  key=lambda kv: -len(kv[0]))
+    if not hits:
+        return ""
+    return "\n".join(["词典："] + ["  %s → %s" % (k, v) for k, v in hits])
+
+
+def _parse_script_response(text):
+    """从模型输出解析 [行号] 译文 -> {行号: 译文}。"""
+    out = {}
+    for ln in (text or "").splitlines():
+        m = _SCRIPT_LINE_RE.match(ln)
+        if m:
+            out[int(m.group(1))] = m.group(2).strip()
+    return out
+
+
+def _translate_script_chunk(client, model, chunk, glossary_block):
+    """翻译一小块剧本，返回 {行号: 译文}。"""
+    sys_prompt = SYSTEM_PROMPT_SCRIPT + ("\n" + glossary_block if glossary_block else "")
+    body = "\n".join("[%d] %s" % (i, t) for i, t in chunk)
+    zh = _safe_translate(client, model, body, sys_prompt)
+    if not zh:
+        return {}
+    return _parse_script_response(zh)
+
+
 def _print_translation_review_sample(data, sample_size=REVIEW_SAMPLE_SIZE):
     """输出随机原文—译文对，供智能体在翻译完成后检查文本异常。"""
     candidates = sorted((source, translated) for source, translated in data.items() if translated)
@@ -254,7 +315,7 @@ def run_translate(cfg, force=False, video=None):
     data = load_translations(translations_path)
     terms = glossary_terms(load_glossary())
 
-    # --force 会重译所有非词典锁定的台词；词典词始终以既定译名为准。
+    # --force 会重译所有台词。整行恰好等于词典词的（如纯人名行）直接按词典填，不占位替换。
     todo = [t for t in dialogue_texts if force or not data.get(t)]
     if todo:
         for t in list(todo):
@@ -263,13 +324,36 @@ def run_translate(cfg, force=False, video=None):
         todo = [t for t in todo if not terms.get(t)]
 
     if todo:
-        print("开始翻译 %d 条台词（%s / %s）..." % (len(todo), tcfg.get("provider"), model))
+        mode = (tcfg.get("mode") or "script").strip().lower()
+        print("开始翻译 %d 条台词（%s / %s，模式 %s）..." % (len(todo), tcfg.get("provider"), model, mode))
         if is_mock:
             for t in todo:
                 data[t] = "[译] %s" % t
                 save_translations(data, translations_path, dial_seen)
+        elif mode == "script":
+            # 剧本化翻译：按首现时间序拼接成剧本，glossary 作为系统提示词，让模型按上下文翻译
+            order = [t for t in _first_seen_order(segments) if t in todo]
+            lines = list(enumerate(order))  # (剧本行号, 文本)
+            chunks = _chunk_lines(lines, tcfg.get("script_chunk_lines") or 50)
+            with ThreadPoolExecutor(max_workers=max(1, min(4, len(chunks)))) as ex:
+                future_chunk = {}
+                for chunk in chunks:
+                    gb = _glossary_block(terms, "\n".join(t for _, t in chunk))
+                    future_chunk[ex.submit(_translate_script_chunk, client, model, chunk, gb)] = chunk
+                for fut in as_completed(future_chunk):
+                    parsed = fut.result() or {}
+                    for sid, txt in future_chunk[fut]:
+                        if parsed.get(sid):
+                            data[txt] = parsed[sid]
+            # 逐行兜底：解析失败/缺失的行回落到逐行翻译
+            for _sid, txt in lines:
+                if not data.get(txt):
+                    src_txt, mapping = _substitute_glossary(txt, terms)
+                    zh = _safe_translate(client, model, src_txt, SYSTEM_PROMPT_DIALOGUE)
+                    if zh:
+                        data[txt] = _restore_glossary(zh, mapping)
+                    save_translations(data, translations_path, dial_seen)
         else:
-
             def work(text):
                 source, mapping = _substitute_glossary(text, terms)
                 zh = _safe_translate(client, model, source, SYSTEM_PROMPT_DIALOGUE)
