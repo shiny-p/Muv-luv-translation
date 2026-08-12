@@ -304,17 +304,56 @@ async function clickMenuItem(page, label) {
   return true;
 }
 
+async function findAvailableStartableRow(page) {
+  // 自动模式:找状态含「显卡空闲可启动」的实例(绿色字体提示,可启动)
+  return page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll('tr[data-row-key]'));
+    for (const tr of rows) {
+      const t = (tr.innerText || '');
+      if (t.includes('显卡空闲可启动')) {
+        return {
+          found: true,
+          rowKey: tr.getAttribute('data-row-key'),
+          rowText: t.replace(/\s+/g, ' ').slice(0, 300),
+          status: /已关机|已停止/.test(t) ? 'off' : (/运行中|开机中|启动中/.test(t) ? 'running' : 'other'),
+        };
+      }
+    }
+    return { found: false };
+  });
+}
+
 async function findAndOperate(page, instanceName, action) {
   const isStart = action === 'start';
   const menuLabel = isStart ? '启动' : '关机';
-  const names = [instanceName, ENV.GPUSHARE_INSTANCE_NAME, FALLBACK_HOST].filter(Boolean);
-  for (const name of names) {
-    log('尝试按名称定位实例:', name);
-    const row = await findShutdownRow(page, name);
-    if (!row.found) continue;
+  // start 未显式指定名称时,强制自动找「显卡空闲可启动」的实例(忽略 .env 默认名称)
+  const explicit = isStart ? [instanceName].filter(Boolean) : [instanceName, ENV.GPUSHARE_INSTANCE_NAME].filter(Boolean);
+  const names = explicit.length ? explicit.concat([FALLBACK_HOST]) : [];
+  // 自动模式:未指定名称时,start 自动找「显卡空闲可启动」的实例
+  let rows = [];
+  if (!names.length && isStart) {
+    log('未指定实例名称,自动查找「显卡空闲可启动」的实例...');
+    const avail = await findAvailableStartableRow(page);
+    if (!avail.found) {
+      log('没有找到「显卡空闲可启动」的实例(可能都在运行或无可启动)');
+      await shot(page, 'no_available');
+      return false;
+    }
+    rows = [avail];
+  } else if (!names.length) {
+    log('未指定实例名称,请用 --instance-name 或配置 GPUSHARE_INSTANCE_NAME');
+    return false;
+  }
+  if (!rows.length) {
+    for (const name of names) {
+      log('尝试按名称定位实例:', name);
+      const row = await findShutdownRow(page, name);
+      if (row.found) { rows.push(row); break; }
+    }
+  }
+  for (const row of rows) {
     log('定位到实例行:', row.rowKey, '| 状态:', row.status);
     log('行内容片段:', row.rowText.slice(0, 200));
-    // 幂等:目标状态已满足
     if (isStart && row.status === 'running') {
       log('实例已处于运行状态,无需操作(幂等完成)');
       await shot(page, 'already_running');
@@ -325,7 +364,6 @@ async function findAndOperate(page, instanceName, action) {
       await shot(page, 'already_off');
       return true;
     }
-    // 展开「实例管理」下拉并点击目标菜单项
     await openInstanceMenu(page, row.rowKey);
     const clicked = await clickMenuItem(page, menuLabel);
     if (!clicked) {
@@ -336,7 +374,7 @@ async function findAndOperate(page, instanceName, action) {
     log('已点击「' + menuLabel + '」菜单项');
     return true;
   }
-  log('未找到匹配的实例(名称/主机名均无命中)');
+  log('未找到匹配的实例');
   await shot(page, 'instance_not_found');
   return false;
 }
