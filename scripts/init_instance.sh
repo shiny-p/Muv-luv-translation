@@ -129,9 +129,9 @@ fi
 .venv/bin/pip install -q --upgrade pip
 .venv/bin/pip install -q -r requirements.txt
 # GPU OCR：替换 CPU 版 onnxruntime
-# 恒源云默认镜像为 CUDA 12.4 + cuDNN 9.x，固定 onnxruntime-gpu 1.19.2（匹配 CUDA 12）；
-# 注意：onnxruntime >= 1.23 需要 CUDA 13，在恒源云默认实例上 CUDA provider 会加载失败。
-.venv/bin/pip install -q "onnxruntime-gpu==1.19.2" || echo "!! onnxruntime-gpu 安装失败（可后续手动处理）"
+# 恒源云默认镜像为 CUDA 12.x + cuDNN 9.x；onnxruntime-gpu>=1.26 需 CUDA 13（libcublasLt.so.13），会加载失败。
+# 固定 1.24.x：支持 CUDA 12 + Blackwell 新卡（实测 5060 Ti GPU 推理 ~140ms/帧）。
+.venv/bin/pip install -q "onnxruntime-gpu>=1.24,<1.26" || echo "!! onnxruntime-gpu 安装失败（可后续手动处理）"
 
 echo "========== [5/7] 写入 GPU 配置 =========="
 # 定位中文字体（优先 Noto CJK，找不到则用 fc-list 兜底）
