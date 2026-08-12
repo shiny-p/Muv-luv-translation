@@ -325,3 +325,4 @@ oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 
     可用 `ffmpeg -i output_cfr.mp4 -map 0:v:0 -vf showinfo -f null - 2>&1 | grep -o pts_time:[0-9.]*` 检查帧间隔是否恒为 1/60。
 - **密钥勿外泄**：`.env`、缓存、`*_output/` 已列入 `.gitignore`
+- **自动关闭实例（深夜无人值守）**：处理完视频后运行 `bash scripts/shutdown_gpushare.sh --shutdown` 即可在恒源云网页点击关机（默认按 `.env` 的 `GPUSHARE_INSTANCE_NAME` 定位实例，未配置则按主机名 `i-2.gpushare.com` 兜底；也可加 `--instance-name <名称>` 指定）。首次需先运行 `bash scripts/shutdown_gpushare.sh --login` 在浏览器中手动登录一次（含验证码），登录会话持久化在 `~/.gpushare-auto/`，之后免登录。
