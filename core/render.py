@@ -419,8 +419,14 @@ def run_render(cfg, force=False, video=None):
     font_size = _global_font_size(segs, rcfg, 1.0)
     print("全局字号: %d px（字幕框高度中位数 × %.2f）" % (font_size, rcfg.get("font_scale", 0.78)))
 
+    base_h = int(round(h * sf))
     append_h = int(round(int(rcfg.get("append_height", 160)) * sf))
-    out_h = int(round(h * sf)) + append_h
+    # H.264 要求宽高为偶数（NVENC 容忍奇数、libx264 不接收）：统一取偶数
+    if base_h % 2:
+        base_h -= 1
+    if append_h % 2:
+        append_h -= 1
+    out_h = base_h + append_h
 
     stem = os.path.splitext(os.path.basename(video))[0]
     out_dir = video_output_dir(video)
@@ -437,7 +443,7 @@ def run_render(cfg, force=False, video=None):
     )
     _enlarge_pipe(proc.stdin)
 
-    reader = _open_reader(video, out_w, int(round(h * sf)), cfg)
+    reader = _open_reader(video, out_w, base_h, cfg)
     next_out = 0
     src_i = 0
     pbar = tqdm(total=n_out, desc="渲染中")
@@ -449,10 +455,10 @@ def run_render(cfg, force=False, video=None):
             if not ok:
                 break
             if sf != 1.0 and not getattr(reader, "scaled", False):
-                frame = cv2.resize(frame, (out_w, int(round(h * sf))), interpolation=cv2.INTER_AREA)
+                frame = cv2.resize(frame, (out_w, base_h), interpolation=cv2.INTER_AREA)
             frame = _render_frame_append(
                 frame, src_i, segs, translations, cfg, font_path, font_size,
-                out_w, int(round(h * sf)), append_h,
+                out_w, base_h, append_h,
             )
             while next_out < n_out and int(next_out * fps / target_fps) <= src_i:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
