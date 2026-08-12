@@ -145,6 +145,12 @@ def glossary_terms(glossary):
     return terms
 
 
+# 词典词只在其为“独立词”时替换：左邻不是假名/汉字（词首、标点、空格、ASCII 之后）才替换，
+# 避免把长词内部的子串误替换（如 決める 里的 める 不应被当成角色名 梅露）。
+# ・(30FB)、、(3001)、。(3002)、！？等标点视为边界，不阻止替换。
+_WORD_CHAR_LOOKBEHIND = r"(?<![぀-ヺー-ヿ㐀-鿿])"
+
+
 def _substitute_glossary(text, terms):
     keys = sorted(terms, key=len, reverse=True)
     mapping = {}
@@ -152,7 +158,7 @@ def _substitute_glossary(text, terms):
     for i, key in enumerate(keys):
         if key in new_text:
             token = "⟨⟨%d⟩⟩" % i
-            new_text = new_text.replace(key, token)
+            new_text = re.sub(_WORD_CHAR_LOOKBEHIND + re.escape(key), token, new_text)
             mapping[token] = terms[key]
     return new_text, mapping
 
