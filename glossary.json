@@ -96,7 +96,15 @@
     "リディア": "莉迪亚"
   },
   "proper_nouns": {
-    "メイスシフタ": "迷宫穿行怪"
+    "メイスシフタ": "迷宫穿行怪",
+    "トリニティ・ジュエル":"Trinity Jewel",
+    "シリウスシュガー": "Sirius Sugar",
+    "カラフルブーケ": "Colorful Bouquet",
+    "カオスメイデン": "Chaos Maiden",
+    "ピクシス・マスール": "Pixis Massur",
+    "トレブルクインテット": "Treble Quintet",
+    "プレ・クラス－Ａ": "Pre-Class-A",
+    "クラスナ": "Krasna"
   },
   "_说明": "names=人名，proper_nouns=专有名词。台词中出现这些词时会按词典译名直接替换、不被模型改写；不在词典中的名字会交给模型翻译。填好后再跑 translate 即生效。"
 }
