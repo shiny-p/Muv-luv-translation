@@ -103,9 +103,22 @@ echo "========== [3/7] 项目代码检查 =========="
 if [ -f "$DEPLOY_DIR/run.py" ] && [ -f "$DEPLOY_DIR/requirements.txt" ]; then
   echo "已检测到项目代码（$DEPLOY_DIR），使用本地/上传版本"
 else
-  echo "!! 未找到项目代码，请先上传项目文件到 $DEPLOY_DIR"
-  echo "   本地执行: bash scripts/init_instance.sh --remote <host>:<port> <password> [key1] [key2]"
-  exit 1
+  echo "未检测到项目代码，尝试从 GitHub 拉取（或使用 --remote 从其他实例同步）..."
+  if git clone -q https://github.com/shiny-p/Muv-luv-translation.git "$DEPLOY_DIR" 2>/dev/null; then
+    echo "已从 GitHub git clone 到 $DEPLOY_DIR"
+  else
+    echo "git clone 失败，改用 GitHub tarball 下载..."
+    if curl -sL -m 120 -o /tmp/mlt.tar.gz https://github.com/shiny-p/Muv-luv-translation/archive/refs/heads/main.tar.gz \
+       && mkdir -p "$DEPLOY_DIR" \
+       && tar xzf /tmp/mlt.tar.gz -C "$DEPLOY_DIR" --strip-components=1 \
+       && rm -f /tmp/mlt.tar.gz; then
+      echo "已从 GitHub tarball 解压到 $DEPLOY_DIR"
+    else
+      rm -f /tmp/mlt.tar.gz
+      echo "!! 无法获取项目代码：请先上传项目文件到 $DEPLOY_DIR，或用 --remote 指定来源实例"
+      exit 1
+    fi
+  fi
 fi
 cd "$DEPLOY_DIR"
 

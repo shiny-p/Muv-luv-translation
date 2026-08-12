@@ -7,14 +7,14 @@
 - **只翻译台词**：人名/说话人标签不单独识别与显示；台词中的角色名、专有名词按 `glossary.json` 词典译名替换，不在词典中的名字交给模型翻译。
 - **自动检测台词区**：按台词位置自动框定识别区域，并生成校验截图供人工确认。
 - **支持逐字打字机显示**：自动合并前缀链，还原完整台词与准确时间。
-- **AI 翻译**：DeepSeek / OpenAI / Qwen 三选一，6 路并发，关闭思考模式。
+- **AI 翻译**：DeepSeek / OpenAI / Qwen 可选；默认**剧本化翻译**（整段剧本 + `glossary.json` 作提示词，模型按上下文翻译），分块并发，关闭思考模式。
 - **OCR 多进程并行**（`--jobs`）：多核机器上显著缩短识别耗时。
 
 > **人名/说话人标签区刻意不识别、不翻译**：区域检测会自动剔除顶部的人名短标签带。若在校验截图或翻译结果中看到人名标签，说明台词区没检测干净，请先修正区域再继续。
 
 ## 环境准备（一次性）
 
-> 在恒源云 GPU 实例上部署：直接运行 `scripts/init_instance.sh`（一键初始化），完整指引见 `恒源云部署指南.md`。本地 macOS 则按下面步骤。
+> 在恒源云实例上部署：按 `恒源云部署指南.md` 操作（脚本 `scripts/init_instance.sh` 会自动装依赖、拉取代码、写 GPU 配置并验证）。本地 macOS 则按下面步骤。
 
 
 ```bash
@@ -62,7 +62,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
   │        → 生成 4 张校验截图 <视频名>_output/region_check_*.png（绿框=检测到的台词区，**必须确认绿框只框住台词、不含人名标签/HUD 杂字**）
   ├─ 2. OCR       读取该视频的 region.json → 按设定间隔抽帧 → 只在台词区内识别 → 字幕段聚合/精修
   │        → **OCR 完成后，智能体必须完整检查 `segments.json` 的全部文本。发现乱码、无意义符号等明显不属于正常文本的内容时，优先进行局部 OCR 重识别后再翻译；不要求理解或校对具体台词内容。**
-  ├─ 3. 翻译      台词中的词典词(glossary.json)先占位保护；其余文本并发调用翻译模型（已关闭思考模式）
+  ├─ 3. 翻译      按时间序把台词拼接成剧本，`glossary.json` 作为系统提示词，模型按整段上下文翻译（分块并发、关闭思考模式）
   │               结果写入 translations.json（原文+译文+时间戳整合在一条记录里），可手工校对
   │        → **翻译完成后，程序对全部译文做全量扫描（规则：翻译文本应大部分为中文）；凡译文仍含日文假名、为空或含乱码的条目，自动重新翻译（最多 2 轮），并列出剩余可疑条目供智能体复核；不要求理解或评估具体内容的翻译质量。**
   └─ 4. 渲染      原画面保留 + 底部加高条带绘制中文（台词居中）
@@ -85,8 +85,8 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | `ocr.sample_step` | 每多少帧抽 1 帧识别（默认 48 ≈ 60fps 下 800ms 一次；**不要低于 24**，过密会捕捉逐字渲染中途的不稳定框） |
 | `ocr.use_gpu` | 用 onnxruntime-gpu(CUDA) 跑 OCR（需 NVIDIA 显卡；安装 `pip install onnxruntime-gpu`） |
 | `cfr.fps` | CFR 目标帧率，0=自动（先取 `render.fps`，否则源视频帧率四舍五入） |
-| `video.encoder` | 视频编码（CFR/渲染共用）：`x264`（CPU，内置 ffmpeg）/ `nvenc`（GPU，需系统 ffmpeg 含 h264_nvenc） |
-| `video.ffmpeg` | 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置，nvenc 用系统 PATH 里的 ffmpeg） |
+| `video.encoder` | 视频编码（CFR/渲染共用）：`nvenc`（GPU，需系统 ffmpeg 含 h264_nvenc）/ `x264`（CPU；若需 CUDA 硬解请同时把 `video.ffmpeg` 设为系统 ffmpeg） |
+| `video.ffmpeg` | 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置 ffmpeg；**nvenc 或 hwaccel=cuda 时建议显式设为系统 ffmpeg**，如 `/usr/bin/ffmpeg`） |
 | `video.hwaccel` | 解码硬加速：`""`=CPU 解码；`cuda`=用 NVDEC/CUDA 硬解源帧（需 NVIDIA 显卡 + 系统 ffmpeg，渲染/CFR 显著提速） |
 | `cfr.crf` / `cfr.preset` | CFR 转换质量/速度（crf 默认 18；preset 默认 fast，仓库 config.yaml 已改为 veryfast 提速） |
 | `cfr.suffix` | CFR 文件名后缀（默认 `_cfr`，即 `<视频名>_cfr.mp4`） |
@@ -95,7 +95,7 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 | `translation.model` | 模型名，如 `deepseek-v4-flash`（程序已自动关闭思考模式以提速）；切千问 DashScope 可用 `deepseek-v4-flash-0731` |
 | `render.append_height` | 底部加高像素（默认 160） |
 | `render.append_bg` | 条带底色：`auto`（匹配台词框暖灰，推荐）/ `black` / `#RRGGBB` |
-| `render.width` | 输出宽度，0=保持原分辨率（仓库 config.yaml 已设为 1920；性能不足可调低） |
+| `render.width` | 输出宽度，0=保持原分辨率（仓库 config.yaml 已设为 1920；性能不足可调低）；**输出宽高自动取偶数**（H.264 要求，如 1920×944） |
 | `render.preset` / `render.crf` | 渲染编码速度/质量（仓库 config.yaml 已设为 veryfast / 18） |
 | `render.font_scale` | 全局字号 = 字幕框高度中位数 × 此系数 |
 | `render.test_frames` | 调试用：只渲染前 N 帧（0=全部） |
@@ -221,7 +221,7 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 
 - 优点：人名/专有名词按上下文正确处理（如 `める` 在 `私とめるは友達だ` 译成"梅露"，而 `決める` 仍是"决定"），无需脆弱的机械占位替换；语句更连贯、人名译法更统一；
 - 实现：剧本按 `translation.script_chunk_lines`（默认 50 行/块）切块、4 路并发调用模型，返回按 `[行号] 译文` 解析回填；解析失败的行自动回落逐行翻译补齐；
-- 预计耗时：每部视频约 2~4 分钟（取决于台词量）；
+- 预计耗时：每部视频约 1~3 分钟（取决于台词量，实测约 90 秒/200+ 条）；
 - 若某次想用旧的逐行模式，把 `translation.mode` 改为 `line` 即可。
 
 ### 翻译完成后的全量扫描与自动重译
@@ -264,7 +264,7 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 
 - **渲染视频 A 的同时，尝试并行处理视频 B 的 CFR/OCR/翻译**：渲染主要占用 NVENC 编码 + CPU 画字幕；CFR 走 NVENC（独立编码会话，实测对渲染影响小）；OCR 走 GPU 推理（可错峰）；翻译走 API（不占实例算力）。实测这种调度把整批总耗时省了约 1/3。
 - **OCR 多进程 `--jobs`**：并行抽帧识别，结果与串行完全一致；多核机器上收益明显。
-- **CPU 核数足够时并行跑 2 个渲染**：渲染是 CPU 密集（OpenCV/PIL 逐帧画字幕），也是全流程最耗时的一步（1920×945@60fps 约 45~58 帧/秒，单视频 10~15 分钟）。消费级显卡 NVENC 并发会话约 3 路，**最多并行 2 路渲染**（2 渲染 + 1 CFR 会踩线）。
+- **CPU 核数足够时并行跑 2 个渲染**：渲染是 CPU 密集（OpenCV/PIL 逐帧画字幕），也是全流程最耗时的一步（1920×944@60fps 约 45~58 帧/秒，单视频 10~15 分钟）。消费级显卡 NVENC 并发会话约 3 路，**最多并行 2 路渲染**（2 渲染 + 1 CFR 会踩线）。
 
 - **`gpushare-cli` 上传百度一次只跑一个**：两个上传并发会导致其本地数据库锁冲突直接 panic 崩溃（实测多洛缇雅上传因此失败一次，重传才成功）；上传进行中也**不要执行 `baidu ls`**（同样会 panic）。上传完成后用 `baidu ls` 核对文件确实在网盘（实测曾出现"报上传完成但实际未进网盘"，需重传）。
 
@@ -277,7 +277,7 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 
 ### 实例配置建议
 
-- 本管线 GPU 需求主要是**硬件编码（NVENC）+ 轻量 OCR 推理**，优先保证 NVENC 与 CPU 核数，显卡算力不必顶级（如 4060 Ti / 3070 级别足够）。
+- 本管线 GPU 需求主要是**硬件编码（NVENC）+ 轻量 OCR 推理**，优先保证 NVENC 与 CPU 核数，显卡算力不必顶级（如 4060 Ti / 3070 级别足够）。**若镜像驱动对某型号显卡的 NVENC 支持不全**（实测 Blackwell 5060 Ti 在部分镜像上 NVENC 不可用），可回退 `video.encoder: x264` + `video.ffmpeg: /usr/bin/ffmpeg`，多核 CPU 实例下渲染仍可达 50+ 帧/秒。
 - **CPU 核数 ≥8（越多越好）**：用于并行渲染与 OCR 多进程；单核性能影响单视频渲染速度。
 - 显存 ≥8GB（OCR `--jobs 2~3` 够用）；内存 ≥16GB（渲染要读 3.5~5GB 的 CFR 文件）。
 - 上传速度受**实例出口带宽**限制（实测约 4.5MB/s），会员权益只影响下载端；实例→网盘上传换配置也不会更快。上传仍首选百度（实测阿里云盘从实例上传仅约 0.5MB/s）。
@@ -309,7 +309,7 @@ oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 
 - **翻译缺 key**：`config.yaml` 填 `translation.api_key` 或 `.env` 设 `DEEPSEEK_API_KEY`（DeepSeek） / `DASHSCOPE_API_KEY`（千问）
 - **切换翻译供应商**：改 `config.yaml` 的 `translation.provider/base_url/api_key_env/model` 即可，多个 key 可同时保留在 `.env` 随时切换（如 deepseek 用 `deepseek-v4-flash`，千问 DashScope 用 `deepseek-v4-flash-0731`）
-- **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash`）；程序已禁用思考模式并启用 6 路并发，数百条台词通常 1~3 分钟完成
+- **翻译慢**：确认 `translation.model` 正确（如 `deepseek-v4-flash`）；默认剧本化翻译（分块并发、关闭思考模式），数百条台词通常 1~3 分钟完成
 - **台词区不准 / 识别不干净**：查看 `region_check_*.png`，确认绿框只框住台词；若框入了人名标签、计时器等杂字，手动收紧该视频 `region.json` 或使用 `--region` 后重跑 `ocr --force`；若自动检测始终不准（如人名嵌在对话框顶部的游戏），用 `tools/region_selector/selector.html` 手动框选（见「台词区域识别」）
 - **人名/说话人标签被识别进去了**：本工具不识别、不翻译人名标签。出现说明台词区框得太松，收紧该视频区域后重跑 `ocr --force`
 - **字幕逐字显示导致碎片/重复**：程序已自动用模糊前缀合并把打字前缀链合并为完整句；保持 `ocr.sample_step` ≥ 24 即可。若仍有局部文本残留，可临时把 `sample_step` 调到 32 左右或手动清理 `segments.json`
