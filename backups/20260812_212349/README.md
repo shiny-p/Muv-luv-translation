@@ -28,23 +28,6 @@ python3.12 -m venv .venv        # 需要 Python 3.12（macOS 可用 /opt/homebre
 - 视频路径一律通过命令行参数传入（放在工作目录根下即可），**不写进 config.yaml**。
 - 下文命令以 `.venv/bin/python run.py` 为例；激活虚拟环境后可直接写 `python run.py`。
 
-### 同步代码到实例（重要，防止覆盖实例配置）
-
-> ⚠️ **实例上的 `config.yaml` / `.env` 是实例专属调优配置，同步代码时严禁覆盖**：
-> - 实例1（5060 Ti）：`encoder: x264` + `ffmpeg: /usr/bin/ffmpeg` + `hwaccel: cuda`（Blackwell NVENC 不可用时的回退方案）；
-> - 实例2（4060 Ti）：`encoder: nvenc` + `hwaccel: cuda`。
-> 本地仓库的 `config.yaml` 只是通用默认值（`use_gpu: false`、`encoder: x264`），直接覆盖会导致实例无法正常开工。
-
-**同步代码一律用脚本**（自动排除 `config.yaml`、`.env`、视频、备份、输出等实例本地产物，只更新代码）：
-
-```bash
-# 用法: bash scripts/sync_instance.sh <SSH端口> <实例密码>   （密码见 .env 的「实例N」注释）
-bash scripts/sync_instance.sh 36425 '<实例1密码>'   # 实例1(5060Ti)
-bash scripts/sync_instance.sh 33993 '<实例2密码>'   # 实例2(4060Ti)
-```
-
-> 若在实例上直接 `git pull` 或手工解压 tar 包，**必须先备份实例的 `config.yaml` / `.env`**，同步后恢复；或重跑 `bash scripts/init_instance.sh`（会按实例显卡重新写入 GPU 配置并验证）。
-
 ## 使用步骤
 
 ```bash
@@ -100,7 +83,7 @@ bash scripts/sync_instance.sh 33993 '<实例2密码>'   # 实例2(4060Ti)
 | `<视频名>_output/region.json` | 台词区（相对坐标 0~1）；首次自动检测写入，不准可手改，不影响其他视频 |
 | `region.fixed` | 固定台词区 `[left,top,right,bottom]`；非空时**不再调用自动检测**、直接应用（仍生成校验截图），单视频仍可用 region.json / `--region` 覆盖 |
 | `ocr.sample_step` | 每多少帧抽 1 帧识别（默认 48 ≈ 60fps 下 800ms 一次；**不要低于 24**，过密会捕捉逐字渲染中途的不稳定框） |
-| `ocr.use_gpu` | 用 onnxruntime-gpu(CUDA) 跑 OCR（需 NVIDIA 显卡；安装 `onnxruntime-gpu>=1.24,<1.26`，勿装 ≥1.26，见「GPU 加速」版本说明） |
+| `ocr.use_gpu` | 用 onnxruntime-gpu(CUDA) 跑 OCR（需 NVIDIA 显卡；安装 `pip install onnxruntime-gpu`） |
 | `cfr.fps` | CFR 目标帧率，0=自动（先取 `render.fps`，否则源视频帧率四舍五入） |
 | `video.encoder` | 视频编码（CFR/渲染共用）：`nvenc`（GPU，需系统 ffmpeg 含 h264_nvenc）/ `x264`（CPU；若需 CUDA 硬解请同时把 `video.ffmpeg` 设为系统 ffmpeg） |
 | `video.ffmpeg` | 自定义 ffmpeg 可执行文件路径；留空自动（x264 用内置 ffmpeg；**nvenc 或 hwaccel=cuda 时建议显式设为系统 ffmpeg**，如 `/usr/bin/ffmpeg`） |
@@ -137,7 +120,6 @@ bash scripts/sync_instance.sh 33993 '<实例2密码>'   # 实例2(4060Ti)
 | `<视频名>_output/` | 该视频的全部文件（CFR 视频、成品、翻译、OCR缓存、台词区、校验截图；源视频按 `cfr.keep_source` 决定去留） |
 | `backups/` | 程序完整备份（按时间戳归档全部源码与配置），需回退时把对应子目录内容复制回项目根即可 |
 | `scripts/shutdown_gpushare.sh` / `.md` | 恒源云实例一键开关机脚本与操作指南（见「关机控制」章节） |
-| `scripts/sync_instance.sh` | **同步代码到实例（重要）**：打包只含代码，自动排除 `config.yaml` / `.env` / 视频 / 备份等实例本地产物，见「环境准备→同步代码到实例」 |
 | `tools/region_selector/` | 手动框选台词区工具（最后手段）：浏览器打开 `selector.html` 拖框选台词区并输出归一化坐标；示例画面在 `frames/`（已 gitignore） |
 
 
@@ -213,16 +195,11 @@ OCR 是整条流水线中最耗时的一步，现已支持多进程并行抽帧�
 
 需要 NVIDIA 显卡与驱动：
 
-1. 安装 GPU 依赖：`pip install 'onnxruntime-gpu>=1.24,<1.26'`（会替换 CPU 版 onnxruntime），并安装含 `h264_nvenc` 的系统 ffmpeg（如 Ubuntu `apt install ffmpeg`，用 `ffmpeg -encoders | grep nvenc` 验证）；
+1. 安装 GPU 依赖：`pip install onnxruntime-gpu`（会替换 CPU 版 onnxruntime），并安装含 `h264_nvenc` 的系统 ffmpeg（如 Ubuntu `apt install ffmpeg`，用 `ffmpeg -encoders | grep nvenc` 验证）；
 2. `config.yaml` 设置 `ocr.use_gpu: true`、`video.encoder: nvenc`、`video.hwaccel: cuda`（`video.ffmpeg` 留空会自动使用系统 ffmpeg）；
 3. OCR 建议 `--jobs 1~2`（每个进程占用独立 CUDA 显存，过大可能爆显存）；渲染/CFR 用 NVENC 编码 + NVDEC 硬解，速度数倍于 CPU 编解码。
 
 > GPU 只影响速度，不影响结果；没有 NVIDIA 显卡时保持默认 `use_gpu: false`、`encoder: x264` 即可。
-
-> **onnxruntime-gpu 与 CUDA 版本必须匹配（踩坑经验）**：
-> - `onnxruntime-gpu >= 1.26` 需要 **CUDA 13**（`libcublasLt.so.13`）；多数恒源云镜像为 **CUDA 12.x**，装最新版会导致 CUDAExecutionProvider 加载失败、**静默回退 CPU**，OCR 慢几十倍（每帧 12s+）。
-> - CUDA 12.x 镜像请固定 **`onnxruntime-gpu>=1.24,<1.26`**（实测支持 Blackwell 新卡如 RTX 5060 Ti，GPU 推理 ~140ms/帧）。
-> - 若某型号显卡 NVENC 不可用（如部分镜像对 Blackwell 支持不全），回退 `video.encoder: x264` + `video.ffmpeg: /usr/bin/ffmpeg`，多核实例下渲染仍可达 50+ 帧/秒。
 
 ### OCR 完成后的全文检查与局部重识别
 
@@ -323,7 +300,6 @@ gpushare-cli baidu up /hy-tmp/<视频名>_output.zip /MuvLuv_成品/
 oss login
 oss cp /hy-tmp/<视频名>_output.zip oss://<视频名>_output.zip
 ```
-> ⚠️ **首次 `oss login`**：必须**交互式登录**（看到 `Username:` 再输账号、看到 `Password:` 再输密码）。用 expect/script 自动填容易把账号**输入两次**（如 `18886112635` → `1888611263518886112635`）导致报「账号未注册」；详见 `恒源云部署指南.md`「OSS 中转」节。
 
 - **上传前先测速选优**：百度网盘/阿里云盘/OSS 的实际传输速度受账号权益、实例出口带宽与时段影响波动很大（实测 OSS 可到数十 MB/s、百度非会员约 10MB/s，且不同时段可能反转）。先用小文件（如 100MB）分别对 `gpushare-cli baidu up`、`gpushare-cli ali up` 与 `oss cp` 各测一次传输速度，选择最快的方式正式上传。
 - 上传速度因账号权益而异：百度非会员上限约 10MB/s，阿里云盘一般不限速（推荐，需另行授权），OSS 通常更快；**一切以实测为准**。

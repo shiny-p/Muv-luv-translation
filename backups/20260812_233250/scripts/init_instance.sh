@@ -134,11 +134,6 @@ fi
 .venv/bin/pip install -q "onnxruntime-gpu>=1.24,<1.26" || echo "!! onnxruntime-gpu 安装失败（可后续手动处理）"
 
 echo "========== [5/7] 写入 GPU 配置 =========="
-# 防御：重写前先备份现有 config.yaml（实例上可能是调优过的配置，防止误覆盖丢失）
-if [ -f "$DEPLOY_DIR/config.yaml" ]; then
-  cp "$DEPLOY_DIR/config.yaml" "$DEPLOY_DIR/config.yaml.bak.$(date +%Y%m%d_%H%M%S)"
-  echo "已备份现有 config.yaml -> config.yaml.bak.*"
-fi
 # 定位中文字体（优先 Noto CJK，找不到则用 fc-list 兜底）
 FONT_PATH=""
 for f in /usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc \
@@ -168,7 +163,6 @@ PY
 
 echo "========== [6/7] API key（.env，可选） =========="
 if [ -n "$DASHSCOPE_KEY" ] || [ -n "$DEEPSEEK_KEY" ]; then
-  [ -f .env ] && cp .env ".env.bak.$(date +%Y%m%d_%H%M%S)" && echo "已备份现有 .env -> .env.bak.*"
   : > .env
   [ -n "$DASHSCOPE_KEY" ] && echo "DASHSCOPE_API_KEY=$DASHSCOPE_KEY" >> .env
   [ -n "$DEEPSEEK_KEY" ] && echo "DEEPSEEK_API_KEY=$DEEPSEEK_KEY" >> .env

@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+.DS_Store
+.env
+ocr/
+*.mp4
+translations.json
+*_output/
+.claude/
+run_*.log
+tools/region_selector/frames/
+
+# 手动框选工具的示例画面（含备份内）不入库
+**/region_selector/frames/
